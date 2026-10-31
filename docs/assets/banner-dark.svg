@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-labelledby="ansBannerTitle">
+  <title id="ansBannerTitle">AI-Native Security — Understand. Detect. Investigate. Remediate. Verify.</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#050b14"/>
+      <stop offset="55%" stop-color="#081120"/>
+      <stop offset="100%" stop-color="#0b1626"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.15" cy="0.35" r="0.7">
+      <stop offset="0%" stop-color="#0e7490" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#0e7490" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0 H0 V40" fill="none" stroke="#1e293b" stroke-width="1" opacity="0.35"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="320" fill="url(#bg)"/>
+  <rect width="1200" height="320" fill="url(#grid)"/>
+  <rect width="1200" height="320" fill="url(#glow)"/>
+
+  <!-- faint evidence graph on the right -->
+  <g opacity="0.35" stroke="#22d3ee" stroke-width="1.4">
+    <path d="M905 96 L1010 62 L1110 118 L1046 196 L936 186 Z" fill="none"/>
+    <path d="M1010 62 L1046 196 M905 96 L936 186 M1110 118 L1046 196 M905 96 L1046 196"/>
+    <path d="M1010 62 L936 186" stroke="#6366f1"/>
+  </g>
+  <g fill="#22d3ee" opacity="0.55">
+    <circle cx="1010" cy="62" r="5"/>
+    <circle cx="936" cy="186" r="4"/>
+    <circle cx="1110" cy="118" r="3.5"/>
+  </g>
+  <g fill="#6366f1" opacity="0.5">
+    <circle cx="905" cy="96" r="4"/>
+    <circle cx="1046" cy="196" r="6"/>
+  </g>
+
+  <!-- logo mark -->
+  <g transform="translate(72 104) scale(0.875)">
+    <rect width="128" height="128" rx="26" fill="#0b1626" stroke="#1e293b" stroke-width="1.5"/>
+    <path d="M64 14 L104 29 V61 C104 88 87 106 64 115 C41 106 24 88 24 61 V29 Z"
+          fill="#081120" stroke="url(#stroke)" stroke-width="4" stroke-linejoin="round"/>
+    <g stroke="url(#stroke)" stroke-width="2.4" stroke-linecap="round" opacity="0.85">
+      <line x1="64" y1="45" x2="46" y2="76"/>
+      <line x1="64" y1="45" x2="82" y2="76"/>
+      <line x1="46" y1="76" x2="82" y2="76"/>
+      <line x1="64" y1="45" x2="64" y2="96"/>
+    </g>
+    <g>
+      <circle cx="64" cy="45" r="7.5" fill="#e2e8f0"/>
+      <circle cx="46" cy="76" r="6" fill="#67e8f9"/>
+      <circle cx="82" cy="76" r="6" fill="#a5b4fc"/>
+      <circle cx="64" cy="96" r="5" fill="#22d3ee"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="200" y="150" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="52" font-weight="700" fill="#f8fafc" letter-spacing="-1">AI-Native</text>
+  <text x="200" y="206" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="52" font-weight="700" fill="#22d3ee" letter-spacing="1">Security</text>
+  <text x="202" y="252" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="21" fill="#94a3b8" letter-spacing="0.4">Understand. Detect. Investigate. Remediate. Verify.</text>
+</svg>

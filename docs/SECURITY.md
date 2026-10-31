@@ -67,3 +67,24 @@ and the controls that exist in the code today, plus the limits you must accept.
 - [ ] Worker resource limits set in compose (CPU/memory) in addition to the
       in-process rlimits.
 - [ ] Log aggregation with retention; logs intentionally contain no secrets.
+
+## Reporting a vulnerability
+
+Do not open a public issue for a vulnerability in this platform.
+
+1. Use GitHub's private vulnerability reporting on
+   `hungpt99-dev/ai-native-security` (Security → Report a vulnerability), or contact
+   the maintainer directly for this deployment.
+2. Include the affected version or commit, the endpoint or component, and the
+   reproduction steps. A report is most useful when it names the control that failed —
+   for example scanner sandboxing, credential encryption, the API-key scope check, or
+   the prompt-injection guard described above.
+3. Redact tokens, repository URLs of private assets, and customer data from logs and
+   screenshots.
+
+Expect an acknowledgement within a few working days. Please do not disclose publicly
+before a fix or mitigation has been agreed.
+
+Out of scope: findings produced *by* the scanners about the repository being scanned
+(those belong in the normal finding workflow), and self-XSS or issues that require an
+already-compromised host.

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="ansLogoTitle">
+  <title id="ansLogoTitle">AI-Native Security logo: a shield containing a connected evidence graph</title>
+  <defs>
+    <linearGradient id="ansStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="ansFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0e1a2b"/>
+      <stop offset="100%" stop-color="#080f1a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="26" fill="url(#ansFill)"/>
+  <rect x="1" y="1" width="126" height="126" rx="25" fill="none" stroke="#1e293b" stroke-width="1.5"/>
+
+  <!-- shield -->
+  <path d="M64 14 L104 29 V61 C104 88 87 106 64 115 C41 106 24 88 24 61 V29 Z"
+        fill="#0b1626" stroke="url(#ansStroke)" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- evidence graph inside the shield -->
+  <g stroke="url(#ansStroke)" stroke-width="2.4" stroke-linecap="round" opacity="0.85">
+    <line x1="64" y1="45" x2="46" y2="76"/>
+    <line x1="64" y1="45" x2="82" y2="76"/>
+    <line x1="46" y1="76" x2="82" y2="76"/>
+    <line x1="64" y1="45" x2="64" y2="96"/>
+  </g>
+  <g fill="#e2e8f0">
+    <circle cx="64" cy="45" r="7.5"/>
+    <circle cx="46" cy="76" r="6" fill="#67e8f9"/>
+    <circle cx="82" cy="76" r="6" fill="#a5b4fc"/>
+  </g>
+  <circle cx="64" cy="96" r="5" fill="#22d3ee"/>
+  <circle cx="64" cy="45" r="12.5" fill="none" stroke="#22d3ee" stroke-width="1.2" opacity="0.45"/>
+</svg>
