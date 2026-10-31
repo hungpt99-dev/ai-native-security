@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Plus, Play, RefreshCw, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -255,7 +255,7 @@ function AssetDialog({
   const key = asset?.id ?? "new";
 
   // Reset form when the dialog target changes.
-  useMemo(() => {
+  useEffect(() => {
     if (!open) return;
     setError(null);
     setForm({

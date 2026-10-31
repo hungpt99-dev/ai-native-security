@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
-import { Input, Label } from "@/components/ui/input";
+import { Label } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState, ErrorState, PageHeader, Pagination, ScanStatusBadge, SeverityBadge } from "@/components/common";
 import { TableSkeleton } from "@/components/ui/skeleton";
@@ -123,10 +123,6 @@ export function ScansPage() {
           </>
         )}
       </Card>
-      <div className="mt-4 max-w-sm">
-        <Label>Quick link</Label>
-        <Input placeholder="Search findings instead →" readOnly onClick={() => window.location.assign("/findings")} />
-      </div>
     </div>
   );
 }

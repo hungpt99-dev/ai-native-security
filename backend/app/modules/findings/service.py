@@ -246,6 +246,7 @@ def resolve_missing_findings(
         stmt = stmt.where(Finding.scanner.in_(list(scanners)))
     rows = db.execute(stmt).scalars().all()
     for row in rows:
+        previous_status = row.status
         row.status = FindingStatus.RESOLVED.value
         row.resolved_at = now
         db.add(
@@ -253,7 +254,7 @@ def resolve_missing_findings(
                 finding_id=row.id,
                 scan_id=scan_id,
                 event=FindingEvent.AUTO_RESOLVED.value,
-                from_status=FindingStatus.OPEN.value,
+                from_status=previous_status,
                 to_status=FindingStatus.RESOLVED.value,
                 actor="system",
                 note="Not detected in the latest successful scan",

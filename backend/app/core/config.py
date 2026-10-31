@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     #: Worker parallelism for Semgrep. High core counts on small VPS instances
     #: otherwise exhaust memory ("engine was killed").
     semgrep_jobs: int = 2
+    #: SBOM output format: cyclonedx-json or spdx-json.
+    sbom_format: str = "cyclonedx-json"
 
     scanners_enabled: Annotated[list[str], NoDecode] = ["trivy", "semgrep", "gitleaks", "syft"]
 
@@ -96,7 +98,7 @@ class Settings(BaseSettings):
     nvd_request_delay_seconds: float = 6.0
     nvd_results_per_page: int = 2000
     #: First-run window (NVD requires <= 120 days per request).
-    nvd_initial_lookback_days: int = 30
+    nvd_initial_lookback_days: int = 7
     #: Safety cap so a scheduled sync cannot run unbounded.
     nvd_max_pages_per_sync: int = 20
     kev_catalog_url: str = (

@@ -149,7 +149,7 @@ Every setting is an environment variable with the `ANS_` prefix; see
 | `ANS_ALLOWED_GIT_HOSTS` | clone allow-list (default `github.com,gitlab.com`) |
 | `ANS_SCANNER_TIMEOUT_SECONDS`, `ANS_SCANNER_MAX_MEMORY_MB` | scanner limits |
 | `ANS_SEMGREP_CONFIG`, `ANS_SEMGREP_JOBS` | Semgrep ruleset and parallelism |
-| `ANS_NVD_API_KEY` | raises the NVD rate limit (5 → 50 requests/30s) |
+| `ANS_NVD_API_KEY`, `ANS_NVD_INITIAL_LOOKBACK_DAYS` | NVD rate limit (5 → 50 req/30s) and first-sync window |
 | `ANS_*_SYNC_INTERVAL_MINUTES` | vulnerability + scan cadence |
 | `ANS_STORAGE_ROOT`, `ANS_STORAGE_BACKEND` | SBOM artifact storage |
 

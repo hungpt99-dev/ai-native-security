@@ -166,6 +166,14 @@ class Scanner(ABC):
         )
 
     # ----------------------------------------------------------------- flow
+    def scan(self, workspace: Path, report_dir: Path) -> ScannerRun:
+        """Run the scanner against a checked-out workspace.
+
+        Implemented on the base class so every adapter shares the same
+        availability check, timeout and error handling.
+        """
+        return self.run(workspace, report_dir)
+
     def run(self, workspace: Path, report_dir: Path) -> ScannerRun:
         availability = self.check_availability()
         if not availability.available:

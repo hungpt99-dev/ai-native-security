@@ -114,7 +114,11 @@ def execute_scan(db: Session, scan_id: uuid.UUID, heartbeat: Heartbeat | None = 
 
         # ------------------------------------------------------------ SBOM
         try:
-            sbom_document = get_syft().generate(workspace, workspace.parent / f"scan-{scan.id}-reports")
+            sbom_document = get_syft().generate(
+                workspace,
+                workspace.parent / f"scan-{scan.id}-reports",
+                sbom_format=settings.sbom_format,
+            )
             _record_execution(
                 db,
                 scan=scan,

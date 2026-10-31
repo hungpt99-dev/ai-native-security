@@ -195,14 +195,37 @@ def _extract_metrics(cve: dict[str, Any]) -> tuple[float | None, str | None, str
             base_severity = data.get("baseSeverity") or entry.get("baseSeverity")
             if score is None:
                 continue
-            if base_severity:
-                severity = str(base_severity).upper()
-                if severity == "MODERATE":
-                    severity = Severity.MEDIUM.value
-            else:
-                severity = _severity_from_score(float(score))
+            severity = _canonical_severity(base_severity, float(score))
             return float(score), vector, severity
     return None, None, Severity.UNKNOWN.value
+
+
+_CANONICAL_SEVERITIES = {
+    Severity.CRITICAL.value,
+    Severity.HIGH.value,
+    Severity.MEDIUM.value,
+    Severity.LOW.value,
+    Severity.INFO.value,
+    Severity.UNKNOWN.value,
+}
+
+
+def _canonical_severity(raw: str | None, score: float) -> str:
+    """Map upstream severity labels onto our canonical set.
+
+    NVD emits labels such as MODERATE and NONE which must not leak into the
+    normalized model (the dashboard and filters assume one vocabulary).
+    """
+    if not raw:
+        return _severity_from_score(score)
+    value = str(raw).strip().upper()
+    if value == "MODERATE":
+        value = Severity.MEDIUM.value
+    if value == "NONE":
+        value = Severity.INFO.value
+    if value in _CANONICAL_SEVERITIES:
+        return value
+    return _severity_from_score(score)
 
 
 def _severity_from_score(score: float) -> str:

@@ -139,6 +139,10 @@ def sync_nvd(db: Session, *, lookback_days: int | None = None) -> dict[str, Any]
             created += page_created
             updated += page_updated
             pages += 1
+            # Expose progress while a long window is still streaming.
+            history.records_processed = processed
+            history.records_created = created
+            history.records_updated = updated
             db.commit()
         status = "SUCCESS"
     except Exception as exc:
