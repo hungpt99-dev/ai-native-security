@@ -70,6 +70,16 @@ def ecosystem_from_purl(purl: str | None, fallback: str | None = None) -> str | 
     return PURL_ECOSYSTEMS.get(purl_type, fallback or purl_type)
 
 
+def normalize_sbom_format(value: str) -> str:
+    """Accept ``cyclonedx-json``/``CYCLONEDX_JSON`` (and SPDX variants)."""
+    fmt = (value or "").strip().upper().replace("-", "_")
+    if fmt not in FORMAT_ARGUMENTS:
+        raise ExternalServiceError(
+            f"Unsupported SBOM format: {value}", details={"allowed": sorted(FORMAT_ARGUMENTS)}
+        )
+    return fmt
+
+
 class SyftGenerator:
     """Generates SBOMs with Syft and parses them into package records."""
 
@@ -116,9 +126,7 @@ class SyftGenerator:
         if not available:
             raise ExternalServiceError(error or "Syft is unavailable")
 
-        fmt = sbom_format.upper()
-        if fmt not in FORMAT_ARGUMENTS:
-            raise ExternalServiceError(f"Unsupported SBOM format: {sbom_format}")
+        fmt = normalize_sbom_format(sbom_format)
         output_dir.mkdir(parents=True, exist_ok=True)
         report_path = output_dir / f"sbom.{FORMAT_ARGUMENTS[fmt]}"
 

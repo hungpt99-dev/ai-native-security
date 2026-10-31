@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.errors import ExternalServiceError
 from app.core.storage import LocalFileStorage
 from app.modules.sbom import service
 from app.modules.sbom.models import Sbom
-from app.modules.scanners.syft import SbomDocument, SbomPackageInfo, SyftGenerator
+from app.modules.scanners.syft import (
+    SbomDocument,
+    SbomPackageInfo,
+    SyftGenerator,
+    normalize_sbom_format,
+)
 
 
 def _document() -> SbomDocument:
@@ -154,3 +161,11 @@ def test_syft_parses_spdx() -> None:
     assert spec_version == "SPDX-2.3"
     assert packages[0].ecosystem == "Debian"
     assert packages[0].purl == "pkg:deb/debian/openssl@3.0.12"
+
+
+def test_sbom_format_aliases_are_accepted() -> None:
+    assert normalize_sbom_format("cyclonedx-json") == "CYCLONEDX_JSON"
+    assert normalize_sbom_format("CYCLONEDX_JSON") == "CYCLONEDX_JSON"
+    assert normalize_sbom_format("spdx-json") == "SPDX_JSON"
+    with pytest.raises(ExternalServiceError):
+        normalize_sbom_format("xml")
