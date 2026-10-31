@@ -1,0 +1,11 @@
+# Runtime dependencies (pinned to the versions exercised by the test suite).
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.6
+alembic==1.20.1
+psycopg[binary]==3.3.6
+pydantic==2.14.2
+pydantic-settings==2.16.2
+httpx==0.28.1
+cryptography==50.0.2
+python-dateutil==3.0.0

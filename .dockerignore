@@ -1,0 +1,16 @@
+# Build context hygiene: only what the images need.
+backend/.venv
+backend/var
+backend/.pytest_cache
+backend/.ruff_cache
+backend/.mypy_cache
+backend/tests
+**/__pycache__
+**/*.pyc
+frontend/node_modules
+frontend/dist
+.git
+.github
+docs
+var
+*.md
