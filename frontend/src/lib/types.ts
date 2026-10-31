@@ -249,3 +249,220 @@ export interface IntelligenceStats {
   by_severity: Record<string, number>;
   last_sync: Record<string, string | null>;
 }
+
+// -------------------------------------------------------------------- AI layer
+export type AiCapabilities = {
+  structured_output: boolean;
+  json_schema: boolean;
+  max_output_tokens: number;
+  reports_cost: boolean;
+};
+
+export type AiHealth = {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  configured: boolean;
+  budget_usd_per_day: number;
+  capabilities: AiCapabilities;
+  budget?: {
+    cost_usd_today: number;
+    input_tokens_today: number;
+    output_tokens_today: number;
+    executions_today: number;
+  };
+  prompts?: number;
+};
+
+export type EvidenceItem = {
+  key: string;
+  kind: string;
+  source: string;
+  locator: string | null;
+  sha256: string;
+  cited?: boolean;
+  excerpt?: string | null;
+};
+
+export type MissingInformation = {
+  code: string;
+  message: string;
+  affects?: string[];
+};
+
+export type SecurityContextPayload = {
+  snapshot_id: string;
+  finding_id: string;
+  context_version: string;
+  evidence_hash: string;
+  missing_information: MissingInformation[];
+  payload: Record<string, unknown>;
+  created_at: string | null;
+  evidence_count?: number;
+};
+
+export type RiskAssessment = {
+  id: string;
+  finding_id: string;
+  asset_id: string;
+  risk_level: string;
+  deterministic_score: number;
+  ai_risk_score: number | null;
+  ai_risk_level: string | null;
+  final_score: number;
+  confidence: number | null;
+  deterministic_only: boolean;
+  requires_human_review: boolean;
+  cvss_score: number | null;
+  epss_score: number | null;
+  is_kev: boolean;
+  summary: string | null;
+  impact_analysis: string | null;
+  exploitability_analysis: string | null;
+  affected_components: string[];
+  signals: Array<{
+    key: string;
+    label: string;
+    value: unknown;
+    normalized: number;
+    weight: number;
+    contribution: number;
+    known: boolean;
+    source: string;
+    note?: string;
+  }>;
+  evidence: EvidenceItem[];
+  missing_information: MissingInformation[];
+  recommended_actions: string[];
+  model: string | null;
+  prompt_version: string | null;
+  created_at: string | null;
+};
+
+export type InvestigationReport = {
+  id: string;
+  finding_id: string;
+  status: string;
+  summary: string | null;
+  impact_analysis: string | null;
+  exploitability_analysis: string | null;
+  confidence: number | null;
+  answers: Record<string, string>;
+  evidence_ids: string[];
+  missing_information: MissingInformation[];
+  next_steps: string[];
+  workflow: { name: string; version: string };
+  model: string;
+  prompt_version: string;
+  error_code: string | null;
+  error_message: string | null;
+  duration_ms: number | null;
+  created_at: string | null;
+  evidence: EvidenceItem[];
+};
+
+export type RemediationRecommendation = {
+  id: string;
+  finding_id: string;
+  asset_id: string;
+  strategy: string;
+  status: string;
+  summary: string | null;
+  reasoning: string | null;
+  target_package: string | null;
+  current_version: string | null;
+  recommended_version: string | null;
+  version_verified: boolean;
+  patch: string | null;
+  patch_format: string | null;
+  changes: Array<{ file?: string; description?: string }>;
+  breaking_change_risks: string[];
+  recommended_tests: string[];
+  expected_security_improvement: string | null;
+  missing_information: MissingInformation[];
+  requires_human_approval: boolean;
+  approved_by: string | null;
+  approved_at: string | null;
+  rejected_reason: string | null;
+  model: string | null;
+  created_at: string | null;
+  verifications?: RemediationVerification[];
+};
+
+export type RemediationVerification = {
+  id: string;
+  recommendation_id: string;
+  finding_id: string;
+  status: string;
+  before_version: string | null;
+  after_version: string | null;
+  finding_present_after: boolean | null;
+  package_present_after: boolean | null;
+  new_findings_count: number | null;
+  policy_result: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  notes: string | null;
+  ai_explanation: string | null;
+  verification_scan_id: string | null;
+  verified_at: string | null;
+  created_at: string | null;
+};
+
+export type AiOverview = {
+  provider: AiHealth;
+  budget: { cost_usd_today: number; input_tokens_today: number; output_tokens_today: number; executions_today: number };
+  top_risk_assets: Array<{
+    asset_id: string;
+    name: string;
+    repo_url: string;
+    highest_final_score: number;
+    assessments: number;
+  }>;
+  critical_findings: Array<{
+    assessment_id: string;
+    finding_id: string;
+    asset_id: string;
+    asset_name: string;
+    title: string;
+    severity: string;
+    risk_level: string;
+    final_score: number;
+    confidence: number | null;
+    deterministic_only: boolean;
+    requires_human_review: boolean;
+    created_at: string | null;
+  }>;
+  needs_review: number;
+  remediation_pending: number;
+  unverified_proposals: number;
+};
+
+export type AssistantReply = {
+  conversation_id: string;
+  answer: string;
+  tool_results: Array<{ tool: string; count: number; rows: unknown; error: string | null }>;
+  cited_finding_ids: string[];
+  cited_asset_ids: string[];
+  data_gaps: string[];
+  executions: string[];
+  model: string;
+};
+
+export type AiExecution = {
+  id: string;
+  kind: string;
+  status: string;
+  provider: string;
+  model: string;
+  prompt_id: string;
+  prompt_version: string;
+  finding_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  duration_ms: number | null;
+  attempts: number;
+  error_code: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};

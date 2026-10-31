@@ -1,13 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type QueryParams } from "@/lib/api";
 import type {
+  AiExecution,
+  AiHealth,
+  AiOverview,
   Asset,
   DashboardSummary,
   Finding,
   IntelligenceStats,
   Job,
+  InvestigationReport,
   Page,
+  RemediationRecommendation,
+  RemediationVerification,
+  RiskAssessment,
   Sbom,
+  SecurityContextPayload,
+  AssistantReply,
   SbomPackage,
   Scan,
   ScannerStatus,
@@ -278,5 +287,165 @@ export function useUpdateSchedule() {
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       api.patch<Schedule>(`/schedules/${id}`, { enabled }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["schedules"] }),
+  });
+}
+
+// -------------------------------------------------------------------- AI layer
+export function useAiHealth() {
+  return useQuery({
+    queryKey: ["ai-health"],
+    queryFn: () => api.get<AiHealth>("/ai/health"),
+    refetchInterval: 30000,
+  });
+}
+
+export function useAiOverview() {
+  return useQuery({
+    queryKey: ["ai-overview"],
+    queryFn: () => api.get<AiOverview>("/ai/overview"),
+    refetchInterval: 20000,
+  });
+}
+
+export function useSecurityContext(findingId: string | undefined) {
+  return useQuery({
+    queryKey: ["ai-context", findingId],
+    queryFn: () => api.get<SecurityContextPayload>(`/findings/${findingId}/security-context`),
+    enabled: Boolean(findingId),
+    retry: false,
+  });
+}
+
+export function useBuildSecurityContext() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (findingId: string) => api.post<SecurityContextPayload>(`/findings/${findingId}/security-context`),
+    onSuccess: (_data, findingId) => {
+      void queryClient.invalidateQueries({ queryKey: ["ai-context", findingId] });
+    },
+  });
+}
+
+export function useRiskAssessments(findingId: string | undefined) {
+  return useQuery({
+    queryKey: ["ai-risk", findingId],
+    queryFn: () => api.get<RiskAssessment[]>(`/findings/${findingId}/risk-assessments`),
+    enabled: Boolean(findingId),
+  });
+}
+
+export function useAssessRisk() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ findingId, useAi }: { findingId: string; useAi: boolean }) =>
+      api.post<RiskAssessment>(`/findings/${findingId}/risk-assessment?use_ai=${useAi}`),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ["ai-risk", variables.findingId] });
+      void queryClient.invalidateQueries({ queryKey: ["ai-overview"] });
+      void queryClient.invalidateQueries({ queryKey: ["ai-executions"] });
+    },
+  });
+}
+
+export function useInvestigations(findingId: string | undefined) {
+  return useQuery({
+    queryKey: ["ai-investigations", findingId],
+    queryFn: () => api.get<InvestigationReport[]>(`/findings/${findingId}/investigations`),
+    enabled: Boolean(findingId),
+  });
+}
+
+export function useInvestigate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (findingId: string) => api.post<InvestigationReport>(`/findings/${findingId}/investigation`),
+    onSuccess: (_data, findingId) => {
+      void queryClient.invalidateQueries({ queryKey: ["ai-investigations", findingId] });
+      void queryClient.invalidateQueries({ queryKey: ["ai-executions"] });
+    },
+  });
+}
+
+export function useFindingRemediations(findingId: string | undefined) {
+  return useQuery({
+    queryKey: ["ai-remediations", findingId],
+    queryFn: () => api.get<RemediationRecommendation[]>(`/findings/${findingId}/remediations`),
+    enabled: Boolean(findingId),
+  });
+}
+
+export function useProposeRemediation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (findingId: string) => api.post<RemediationRecommendation>(`/findings/${findingId}/remediation`),
+    onSuccess: (_data, findingId) => {
+      void queryClient.invalidateQueries({ queryKey: ["ai-remediations", findingId] });
+      void queryClient.invalidateQueries({ queryKey: ["remediation-queue"] });
+    },
+  });
+}
+
+export function useRemediationQueue(params: QueryParams) {
+  return useQuery({
+    queryKey: ["remediation-queue", params],
+    queryFn: () => api.get<Page<RemediationRecommendation>>("/remediations", params),
+  });
+}
+
+export function useApproveRemediation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, note }: { id: string; note?: string }) =>
+      api.post<RemediationRecommendation>(`/remediations/${id}/approve`, { note }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["remediation-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["ai-overview"] });
+    },
+  });
+}
+
+export function useRejectRemediation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, note }: { id: string; note: string }) =>
+      api.post<RemediationRecommendation>(`/remediations/${id}/reject`, { note }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["remediation-queue"] });
+    },
+  });
+}
+
+export function useStartVerification() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ recommendation: RemediationRecommendation; scan: { id: string; status: string } }>(
+        `/remediations/${id}/verify`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["remediation-queue"] });
+    },
+  });
+}
+
+export function useVerifications(findingId: string | undefined) {
+  return useQuery({
+    queryKey: ["ai-verifications", findingId],
+    queryFn: () => api.get<RemediationVerification[]>(`/findings/${findingId}/verifications`),
+    enabled: Boolean(findingId),
+  });
+}
+
+export function useAskAssistant() {
+  return useMutation({
+    mutationFn: (payload: { question: string; conversation_id?: string }) =>
+      api.post<AssistantReply>("/ai/assistant/ask", payload),
+  });
+}
+
+export function useAiExecutions(params: QueryParams) {
+  return useQuery({
+    queryKey: ["ai-executions", params],
+    queryFn: () => api.get<Page<AiExecution>>("/ai/executions", params),
   });
 }

@@ -7,6 +7,7 @@ has a CVSS vector, so both fields stay optional.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -99,7 +100,7 @@ class OsvClient:
         return response.get("vulns") or []
 
     def query_batch(
-        self, packages: list[tuple[str, str, str | None]]
+        self, packages: Sequence[tuple[str, str, str | None]]
     ) -> list[list[dict[str, Any]]]:
         """Query many packages, tolerating individual rejected entries.
 
@@ -108,7 +109,7 @@ class OsvClient:
         """
         results: list[list[dict[str, Any]]] = []
         for start in range(0, len(packages), _MAX_BATCH):
-            chunk = packages[start : start + _MAX_BATCH]
+            chunk = list(packages[start : start + _MAX_BATCH])
             results.extend(self._query_chunk(chunk))
         return results
 

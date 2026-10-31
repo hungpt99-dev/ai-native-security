@@ -20,7 +20,7 @@ from app.core.logging import get_logger
 from app.modules.sbom.models import SbomPackage
 from app.modules.vulnerabilities import repository as vuln_repo
 from app.modules.vulnerabilities.kev import KevClient
-from app.modules.vulnerabilities.models import Vulnerability
+from app.modules.vulnerabilities.models import Vulnerability, VulnerabilitySyncHistory
 from app.modules.vulnerabilities.nvd import NvdClient, parse_nvd_vulnerability
 from app.modules.vulnerabilities.osv import OsvClient, parse_osv_vulnerability
 
@@ -99,9 +99,9 @@ def sync_kev(db: Session) -> dict[str, Any]:
         }
     except Exception as exc:
         db.rollback()
-        history = db.get(type(history), history.id)
-        if history is not None:
-            _finish(db, history, status="FAILED", error=str(exc))
+        refreshed = db.get(VulnerabilitySyncHistory, history.id)
+        if refreshed is not None:
+            _finish(db, refreshed, status="FAILED", error=str(exc))
         logger.exception("kev sync failed")
         raise
 
@@ -147,9 +147,9 @@ def sync_nvd(db: Session, *, lookback_days: int | None = None) -> dict[str, Any]
         status = "SUCCESS"
     except Exception as exc:
         db.rollback()
-        history = db.get(type(history), history.id)
-        if history is not None:
-            _finish(db, history, status="FAILED", error=str(exc))
+        refreshed = db.get(VulnerabilitySyncHistory, history.id)
+        if refreshed is not None:
+            _finish(db, refreshed, status="FAILED", error=str(exc))
         logger.exception("nvd sync failed")
         raise
 
@@ -272,6 +272,8 @@ def sync_source(db: Session, source: str, **kwargs: Any) -> dict[str, Any]:
         return sync_nvd(db, **kwargs)
     if key == VulnerabilitySource.OSV.value:
         return sync_osv(db)
+    if key == "EPSS":
+        return sync_epss(db)
     raise ValueError(f"Unknown vulnerability source: {source}")
 
 
@@ -296,6 +298,71 @@ def latest_syncs(db: Session) -> dict[str, Any]:
             "last_success_at": entry.finished_at.isoformat() if entry and entry.finished_at else None,
             "records_processed": entry.records_processed if entry else 0,
         }
+    epss_entry = vuln_repo.last_successful_sync(db, "EPSS")
+    result["EPSS"] = {
+        "last_success_at": epss_entry.finished_at.isoformat()
+        if epss_entry and epss_entry.finished_at
+        else None,
+        "records_processed": epss_entry.records_processed if epss_entry else 0,
+    }
     total = db.execute(select(Vulnerability.id)).scalars().all()
     result["total_records"] = len(total)
     return result
+
+
+def sync_epss(db: Session) -> dict[str, Any]:
+    """Refresh the EPSS score table from FIRST's daily feed.
+
+    EPSS is stored separately from ``vulnerabilities`` because it is keyed by CVE
+    only and refreshed daily. A failed refresh leaves the previous scores in
+    place: stale scores are still evidence, and the sync history records the gap.
+    """
+    from app.modules.vulnerabilities import epss as epss_module
+
+    settings = get_settings()
+    source = epss_module.EPSS_SOURCE
+    if not settings.epss_enabled:
+        return {"source": source, "status": "SKIPPED", "processed": 0, "created": 0, "updated": 0}
+
+    history = vuln_repo.start_sync(db, source)
+    db.commit()
+    started = time.perf_counter()
+    try:
+        rows, meta = epss_module.EpssClient().fetch()
+        written = epss_module.upsert_scores(db, rows)
+        _finish(
+            db,
+            history,
+            status="SUCCESS",
+            processed=written,
+            created=written,
+            updated=0,
+            cursor=meta.get("score_date"),
+        )
+        logger.info(
+            "epss sync completed",
+            extra={
+                "extra_fields": {
+                    "rows": written,
+                    "model_version": meta.get("model_version"),
+                    "score_date": meta.get("score_date"),
+                    "duration_seconds": round(time.perf_counter() - started, 2),
+                }
+            },
+        )
+        return {
+            "source": source,
+            "status": "SUCCESS",
+            "processed": written,
+            "created": written,
+            "updated": 0,
+            "model_version": meta.get("model_version"),
+            "score_date": meta.get("score_date"),
+        }
+    except Exception as exc:
+        db.rollback()
+        refreshed = db.get(VulnerabilitySyncHistory, history.id)
+        if refreshed is not None:
+            _finish(db, refreshed, status="FAILED", error=str(exc))
+        logger.exception("epss sync failed")
+        raise

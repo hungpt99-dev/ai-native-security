@@ -12,7 +12,7 @@ from app.core.errors import NotFoundError
 from app.core.logging import get_logger
 from app.core.pagination import PageParams, paginate
 from app.core.storage import StorageBackend, get_storage
-from app.modules.sbom.models import Sbom, SbomPackage
+from app.modules.sbom.models import Sbom, SbomPackage, SbomPackageEdge
 from app.modules.scanners.syft import SbomDocument
 
 logger = get_logger(__name__)
@@ -48,11 +48,15 @@ def store_sbom(
     db.flush()
 
     seen: set[tuple[str, str, str | None]] = set()
+    direct_keys = document.direct_package_keys
     for package in document.packages:
         marker = (package.name.lower(), package.version, package.purl)
         if marker in seen:
             continue
         seen.add(marker)
+        is_direct: bool | None = None
+        if direct_keys or document.edges:
+            is_direct = (package.name.lower(), package.version) in direct_keys
         db.add(
             SbomPackage(
                 sbom_id=sbom.id,
@@ -63,8 +67,30 @@ def store_sbom(
                 license=package.license,
                 source_type=package.source_type,
                 cpe=package.cpe,
+                is_direct=is_direct,
             )
         )
+    edge_count = 0
+    if document.edges:
+        edge_seen: set[tuple[str | None, str]] = set()
+        for edge in document.edges:
+            edge_marker = (edge.from_ref, edge.to_ref)
+            if edge_marker in edge_seen:
+                continue
+            edge_seen.add(edge_marker)
+            db.add(
+                SbomPackageEdge(
+                    sbom_id=sbom.id,
+                    from_ref=edge.from_ref,
+                    to_ref=edge.to_ref,
+                    from_name=edge.from_name,
+                    from_version=edge.from_version,
+                    to_name=edge.to_name,
+                    to_version=edge.to_version,
+                    relation=edge.relation,
+                )
+            )
+            edge_count += 1
     db.flush()
     logger.info(
         "sbom stored",
@@ -73,6 +99,8 @@ def store_sbom(
                 "sbom_id": str(sbom.id),
                 "asset_id": str(asset_id),
                 "packages": sbom.package_count,
+                "edges": edge_count,
+                "direct_packages": len(direct_keys),
                 "bytes": sbom.size_bytes,
             }
         },

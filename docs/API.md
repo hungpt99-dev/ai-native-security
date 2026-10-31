@@ -147,6 +147,60 @@ Documents are served from object storage; the database holds metadata only.
 | GET | `/schedules` | configured periodic tasks |
 | PATCH | `/schedules/{id}` | enable/disable, change interval |
 
+## AI intelligence
+
+All AI endpoints require the same API key as the rest of the platform. When AI is
+disabled or unconfigured, model-backed mutations return `503 ai_unavailable`; the
+deterministic endpoints keep working.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/ai/health` | provider, model, configured flag, capabilities, today's spend/tokens |
+| GET | `/ai/overview` | dashboard aggregate: highest-risk repositories/findings, review backlog, pending proposals |
+| GET | `/ai/executions` | paged execution ledger (`kind`, `status`, `finding_id` filters) |
+| GET | `/ai/prompts` | registered prompt ids, versions and hashes |
+| GET | `/ai/policies` | versioned policy documents (`kind` filter) |
+| POST | `/ai/assistant/ask` | grounded answer over read-only tools (`question`, optional `conversation_id`) |
+| GET | `/ai/assistant/conversations/{id}` | transcript including tool calls and rows |
+| GET/PUT | `/ai/assets/{asset_id}/security-profile` | business context (criticality, exposure, environment, owner) |
+| GET | `/findings/{id}/security-context` | latest context snapshot |
+| POST | `/findings/{id}/security-context` | build and persist a context snapshot (no model call) |
+| POST | `/findings/{id}/risk-assessment?use_ai=true` | assess risk; `use_ai=false` produces a deterministic-only assessment |
+| GET | `/findings/{id}/risk-assessments` | append-only assessment history |
+| POST | `/findings/{id}/investigation` | run the investigation workflow (LangGraph) |
+| GET | `/findings/{id}/investigations` | investigation history with evidence |
+| POST | `/findings/{id}/remediation` | propose remediation (patch proposals only) |
+| GET | `/findings/{id}/remediations` | proposals for a finding |
+| GET | `/findings/{id}/verifications` | verification history |
+| GET | `/remediations` | remediation queue (`status`, `asset_id` filters) |
+| GET | `/remediations/{id}` | proposal + verification history |
+| POST | `/remediations/{id}/approve` | human approval (records a decision) |
+| POST | `/remediations/{id}/reject` | rejection, requires a reason |
+| POST | `/remediations/{id}/verify` | move to `VALIDATING` and start a verification scan |
+| GET | `/remediations/{id}/verifications` | verifications for a proposal |
+| POST | `/verifications/{id}/explain` | attach an AI explanation (status is never changed) |
+
+`POST /findings/{id}/risk-assessment` response (abridged):
+
+```json
+{
+  "risk_level": "HIGH",
+  "cvss_score": 9.8,
+  "deterministic_score": 77,
+  "ai_risk_score": 80,
+  "final_score": 78,
+  "confidence": 0.71,
+  "deterministic_only": false,
+  "requires_human_review": true,
+  "signals": [
+    {"key": "kev", "value": true, "weight": 0.18, "known": true, "contribution": 0.18},
+    {"key": "exposure", "value": null, "weight": 0.12, "known": false, "contribution": 0.06}
+  ],
+  "evidence": [{"key": "E1", "kind": "finding", "sha256": "...", "cited": true}],
+  "missing_information": [{"code": "business_context_not_configured", "message": "..."}]
+}
+```
+
 ## Status codes
 
 | Code | Meaning |

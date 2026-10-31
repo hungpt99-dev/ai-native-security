@@ -138,7 +138,7 @@ def parse_nvd_vulnerability(item: dict[str, Any]) -> VulnerabilityRecord | None:
                 if len(parts) > 5 and parts[0] == "cpe":
                     product = parts[4]
                     version = parts[5] if len(parts) > 5 else "*"
-                    record = affected.setdefault(
+                    package_record = affected.setdefault(
                         product,
                         AffectedPackageRecord(
                             ecosystem="CPE",
@@ -149,8 +149,8 @@ def parse_nvd_vulnerability(item: dict[str, Any]) -> VulnerabilityRecord | None:
                             version_ranges=[],
                         ),
                     )
-                    if version and version not in record.affected_versions:
-                        record.affected_versions.append(version)
+                    if version and version not in package_record.affected_versions:
+                        package_record.affected_versions.append(version)
 
     weaknesses: list[str] = []
     for weakness in cve.get("weaknesses") or []:

@@ -13,7 +13,7 @@ from app.core.pagination import Page, PageParams, page_params
 from app.database.session import get_db
 from app.modules.assets.models import Asset
 from app.modules.scans import service
-from app.modules.scans.schemas import ScanDetail, ScanRead
+from app.modules.scans.schemas import ScanDetail, ScannerExecutionRead, ScanRead
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -43,7 +43,9 @@ def get_scan(
     executions = service.list_scanner_executions(db, scan.id)
     asset = db.get(Asset, scan.asset_id)
     detail = ScanDetail.model_validate(scan)
-    detail.executions = list(executions)
+    detail.executions = [
+        ScannerExecutionRead.model_validate(execution) for execution in executions
+    ]
     detail.asset_name = asset.name if asset else None
     detail.asset_repo_url = asset.repo_url if asset else None
     return detail

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -55,6 +55,9 @@ class SbomPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     license: Mapped[str | None] = mapped_column(Text)
     source_type: Mapped[str | None] = mapped_column(String(64))
     cpe: Mapped[str | None] = mapped_column(String(255))
+    #: True when the package is declared by a manifest in the repository rather
+    #: than pulled in by another package. NULL when the generator did not say.
+    is_direct: Mapped[bool | None] = mapped_column(Boolean)
 
     sbom: Mapped[Sbom] = relationship(back_populates="packages")
 
@@ -62,4 +65,35 @@ class SbomPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_sbom_packages_sbom", "sbom_id"),
         Index("ix_sbom_packages_name_version", "name", "version"),
         Index("ix_sbom_packages_ecosystem_name", "ecosystem", "name"),
+    )
+
+
+class SbomPackageEdge(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A dependency relationship extracted from the SBOM document.
+
+    CycloneDX ``dependencies`` is a graph; the package table is a list. Without
+    these rows the platform cannot answer "is this direct or transitive" or
+    "what pulls this package in", which is the difference between a CVSS guess
+    and a contextual risk.
+    """
+
+    __tablename__ = "sbom_package_edges"
+
+    sbom_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("sboms.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``from_ref`` is the CycloneDX bom-ref of the dependent package; NULL for a
+    #: root (the scanned subject) whose children are direct dependencies.
+    from_ref: Mapped[str | None] = mapped_column(String(500))
+    to_ref: Mapped[str] = mapped_column(String(500), nullable=False)
+    from_name: Mapped[str | None] = mapped_column(String(255))
+    from_version: Mapped[str | None] = mapped_column(String(128))
+    to_name: Mapped[str | None] = mapped_column(String(255))
+    to_version: Mapped[str | None] = mapped_column(String(128))
+    relation: Mapped[str] = mapped_column(String(32), nullable=False, default="DEPENDS_ON")
+
+    __table_args__ = (
+        Index("ix_sbom_edges_sbom", "sbom_id"),
+        Index("ix_sbom_edges_to_name", "sbom_id", "to_name"),
+        Index("ix_sbom_edges_from_name", "sbom_id", "from_name"),
     )

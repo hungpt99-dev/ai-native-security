@@ -1,13 +1,18 @@
-# AI-Native Security Platform — Phase 1
+# AI-Native Security Platform
 
 Self-hosted security platform that continuously scans source repositories,
-generates SBOMs, correlates vulnerabilities with public intelligence feeds and
-gives you one place to triage findings.
+generates SBOMs, correlates vulnerabilities with public intelligence feeds,
+investigates them **in application context** with an LLM, proposes remediation and
+then proves with a fresh scan whether the fix actually worked.
 
-Phase 1 is deliberately a **modular monolith**: one FastAPI application, one
-worker process, one scheduler, PostgreSQL and a React dashboard. No microservices,
-no Kafka, no Kubernetes, no AI agents yet — but the module boundaries and data
-model are designed so those can be added later.
+The design rule is: **AI proposes, evidence disposes.** The model reasons over
+structured evidence and produces structured, cited output; scanners, version
+comparisons, policy gates and verification results stay deterministic and remain
+the only authority on whether something is fixed.
+
+It is still a **modular monolith**: one FastAPI application, one worker, one
+scheduler, PostgreSQL and a React dashboard. The AI layer is a module inside it —
+no microservices, no Kafka, no Kubernetes, no vector database.
 
 ```
  ┌──────────┐   REST    ┌──────────────┐   SQL   ┌────────────┐
@@ -38,10 +43,19 @@ model are designed so those can be added later.
 | Dashboard, repository, scan, finding, SBOM and operations pages | implemented |
 | Automated tests (unit, integration, security) | implemented |
 | API-key authentication (optional), credential encryption, secret redaction | implemented |
+| Security context builder (repository, finding, dependency, vulnerability, business, history) | implemented |
+| AI risk assessment: deterministic signals + policy blend + cited AI judgement | implemented |
+| AI investigation workflow (LangGraph) with evidence citations and bounded statuses | implemented |
+| AI remediation proposals (patch proposals only, version-checked against intel) | implemented |
+| Approval workflow + deterministic verification (re-scan diff, new-risk detection) | implemented |
+| Security assistant with read-only, asset-scoped tools | implemented |
+| Decision history, feedback capture, versioned security policies | implemented |
+| EPSS exploitation probability ingest | implemented |
 
-Not part of this phase: AI agents/remediation, pull-request creation, runtime
-detection, SIEM, attack-path analysis, microservices, Kubernetes, Kafka,
-LangGraph, OpenSearch.
+Not part of this phase: pull-request creation, deployment verification, runtime
+detection, SIEM, attack-path analysis (symbol-level reachability), microservices,
+Kubernetes, Kafka, a vector database.
+
 
 ## Requirements
 

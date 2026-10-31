@@ -35,13 +35,25 @@ after `max_attempts`) at worker startup and periodically.
 
 ```
 app/modules/
-├── assets/          # repository inventory + encrypted credentials
-├── scans/           # scan lifecycle rows and state machine
-├── scanners/        # adapters + hardened subprocess layer (no DB access)
-├── sbom/            # SBOM persistence, package inventory, downloads
-├── vulnerabilities/ # OSV/NVD/KEV clients, sync, CVSS, correlation
-└── findings/        # normalization ingestion, dedup, history, queries
+├── assets/               # repository inventory + encrypted credentials
+├── scans/                # scan lifecycle rows and state machine
+├── scanners/             # adapters + hardened subprocess layer (no DB access)
+├── sbom/                 # SBOM persistence, package inventory, dependency edges
+├── vulnerabilities/      # OSV/NVD/KEV/EPSS clients, sync, CVSS, correlation
+├── findings/             # normalization ingestion, dedup, history, queries
+├── security_intelligence/# context builder, dependency graph, version maths, snippets
+├── ai/                   # providers, prompts, agents, workflows, ledger, assistant tools
+├── risk_analysis/        # deterministic signals + AI risk assessment
+├── security_policies/    # versioned policy documents
+├── remediation/          # proposals + approval lifecycle
+├── verification/         # deterministic post-fix verification
+└── knowledge_base/       # decisions, feedback, assistant transcripts
 ```
+
+The AI layer is documented separately in [`AI_ARCHITECTURE.md`](AI_ARCHITECTURE.md).
+Boundary rules: business modules never import `ai.providers`; only `ai/**` may
+construct a provider; `security_intelligence` and `verification` never import the
+AI layer at all, so they stay runnable with AI disabled.
 
 Rules that keep the boundaries honest:
 
@@ -73,8 +85,19 @@ Rules that keep the boundaries honest:
    enriches trivy/OSV findings by CVE.
 8. **Resolution** — only when no scanner failed, and only for scanners that ran
    successfully, findings not seen in this scan become RESOLVED with history.
-9. **Summary** — severity counts, new/resolved counts, duration, asset status.
-10. **Cleanup** — workspace and scanner reports deleted.
+9. **Repository facts** — languages, frameworks and manifest list derived from the
+   SBOM plus a bounded workspace walk (`asset_repository_metadata`).
+10. **Code evidence** — for findings without scanner-provided lines, capture a
+    bounded, redacted snippet around the reported location.
+11. **Summary** — severity counts, new/resolved counts, duration, asset status.
+12. **Verification** — if the asset has approved remediations in flight, evaluate
+    them against this scan's evidence (deterministic statuses only).
+13. **AI queueing** — when AI is enabled, queue contextual risk analysis for the
+    highest-severity new findings (bounded by `ANS_AI_AUTO_ANALYZE_MAX_FINDINGS`).
+14. **Cleanup** — workspace and scanner reports deleted.
+
+Steps 12 and 13 are best-effort: a failure there is logged and never rewrites the
+scan's own outcome.
 
 A single status flag is not enough for "did this work?": the pipeline treats any
 scanner `FAILED`/`TIMED_OUT` as scan `FAILED` (findings are still stored), which

@@ -1,7 +1,9 @@
 import { NavLink, Outlet } from "react-router-dom";
 import {
   Activity,
+  Bot,
   Boxes,
+  GitPullRequest,
   LayoutDashboard,
   Package,
   Radar,
@@ -16,6 +18,8 @@ const navigation = [
   { to: "/assets", label: "Repositories", icon: Server },
   { to: "/scans", label: "Scans", icon: Activity },
   { to: "/findings", label: "Findings", icon: ShieldAlert },
+  { to: "/remediation", label: "Remediation", icon: GitPullRequest },
+  { to: "/assistant", label: "Assistant", icon: Bot },
   { to: "/sboms", label: "SBOMs", icon: Package },
   { to: "/intelligence", label: "Intelligence", icon: Radar },
   { to: "/operations", label: "Operations", icon: Boxes },

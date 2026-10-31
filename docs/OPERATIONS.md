@@ -71,6 +71,51 @@ Restore in the reverse order (database first, then the volume), then run
 * `GET /api/v1/schedules` → `next_run_at` should move forward, `last_status`
   should not be stuck on `SKIPPED`.
 
+## AI configuration and budget
+
+AI is off until you configure a provider:
+
+```bash
+ANS_AI_ENABLED=true
+ANS_AI_PROVIDER=openai            # any OpenAI-compatible endpoint
+ANS_AI_BASE_URL=https://api.openai.com/v1
+ANS_AI_MODEL=gpt-4.1-mini
+ANS_AI_API_KEY=sk-...
+ANS_AI_DAILY_BUDGET_USD=5
+# Gateways that need routing headers (single-quote the JSON!):
+# ANS_AI_EXTRA_HEADERS='{"x-session":"ai-native-security"}'
+```
+
+Verify:
+
+```bash
+curl -s localhost:8010/api/v1/ai/health | jq
+# enabled/configured/model + budget.cost_usd_today + budget.executions_today
+```
+
+Checks worth running in production:
+
+| Check | Query / endpoint |
+| --- | --- |
+| spend today | `GET /api/v1/ai/health` → `budget.cost_usd_today` |
+| failures by code | `GET /api/v1/ai/executions?status=FAILED` |
+| rate limiting | `GET /api/v1/ai/executions?status=RATE_LIMITED` |
+| invalid model output | `GET /api/v1/ai/executions?status=INVALID_OUTPUT` |
+| deterministic-only assessments | `select count(*) from risk_assessments where deterministic_only` |
+| unverified proposals | `select count(*) from remediation_recommendations where status in ('AWAITING_APPROVAL','APPROVED')` |
+
+Operational rules:
+
+* A budget of `0` disables the hard stop (not recommended). The default is `5`.
+* Auto-analysis after a scan is bounded by `ANS_AI_AUTO_ANALYZE_MAX_FINDINGS` (10)
+  and `ANS_AI_AUTO_ANALYZE_MIN_SEVERITY` (`HIGH`); raise deliberately.
+* If the provider is down, scans still complete; assessments are stored as
+  `deterministic_only` and are visibly labelled in the UI.
+* EPSS refresh (`SYNC_EPSS`, daily) needs outbound access to the FIRST feed; a
+  failure keeps the previous scores and is recorded in `vulnerability_sync_history`.
+* Rotating `ANS_AI_MODEL` is safe: every assessment records the model and prompt
+  version it was produced with.
+
 ## Troubleshooting
 
 ### Scan stuck in RUNNING
@@ -130,6 +175,18 @@ A partial unique index enforces one active scan per repository. Wait for it, or
 By design: resolution only happens for scans that completed with **no** failed
 or timed-out scanner. If a scanner is unhealthy, old findings stay open until a
 clean scan runs.
+
+## Troubleshooting: AI
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `/ai/health` shows `configured: false` | no key, or `ANS_AI_ENABLED=false` | set both, restart api/worker |
+| `503 ai_unavailable` on a mutation | AI disabled or severity gate excluded the finding | expected; deterministic results still exist |
+| `ai_provider_error` with 400 | gateway rejected `response_format` or the model name | the provider falls back to `json_object` once; check `ANS_AI_MODEL` |
+| assessments all `deterministic_only` | every call failed | inspect `GET /ai/executions?status=FAILED` and the worker logs |
+| `ai_budget_exceeded` | daily budget reached | raise `ANS_AI_DAILY_BUDGET_USD` or wait for the next UTC day |
+| empty completions (`INVALID_OUTPUT`, `finish_reason=length`) | reasoning model spent the token budget | raise `ANS_AI_MAX_OUTPUT_TOKENS` |
+| assistant refuses / returns gaps | no matching rows in the data | check the tool results in the transcript; the answer is grounded, not guessed |
 
 ## Upgrading
 

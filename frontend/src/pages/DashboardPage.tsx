@@ -6,6 +6,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState, PageHeader, ScanStatusBadge, SeverityBadge } from "@/components/common";
 import { useDashboard } from "@/hooks/queries";
+import { AiOverviewSection } from "@/components/ai-overview";
 import { formatRelative } from "@/lib/utils";
 
 function StatCard({
@@ -64,6 +65,8 @@ export function DashboardPage() {
           </Link>
         }
       />
+
+      <AiOverviewSection />
 
       {isLoading || !data ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

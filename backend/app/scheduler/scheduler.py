@@ -117,6 +117,18 @@ def ensure_default_schedules(db: Session) -> None:
             kind=JobKind.SYNC_KEV,
             interval_seconds=max(600, settings.kev_sync_interval_minutes * 60),
         )
+    if settings.epss_enabled:
+        _upsert_schedule(
+            db,
+            name="sync:epss",
+            kind=JobKind.SYNC_EPSS,
+            interval_seconds=max(1800, settings.epss_sync_interval_minutes * 60),
+        )
+    # Policies are data; seeding them here keeps a fresh install usable without a
+    # manual step and without writing during a read path.
+    from app.modules.security_policies.service import ensure_defaults
+
+    ensure_defaults(db)
     db.commit()
 
 
@@ -174,7 +186,7 @@ def claim_due_schedules(db: Session, limit: int = 20) -> list[Schedule]:
                 extra={"extra_fields": {"schedule": schedule.name}},
             )
     db.commit()
-    return due
+    return list(due)
 
 
 def tick(db: Session) -> int:

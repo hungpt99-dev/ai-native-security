@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ auth
     auth_enabled: bool = False
     api_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    #: Optional per-key asset restriction: {"1": ["<asset-uuid>", ...]} maps the
+    #: 1-based index in ``api_keys`` to the assets that key may see. A key with no
+    #: entry keeps full access (backwards compatible single-tenant default).
+    api_key_scopes: Annotated[dict[str, list[str]], NoDecode] = Field(default_factory=dict)
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173"]
     )
@@ -112,6 +116,57 @@ class Settings(BaseSettings):
     kev_sync_interval_minutes: int = 1440
     scanner_schedule_interval_minutes: int = 240
 
+    # ------------------------------------------------------------------- ai
+    # The AI layer is off by default: without a key the platform must behave
+    # exactly like Phase 1. Nothing deterministic ever depends on these values.
+    ai_enabled: bool = False
+    ai_provider: str = "openai"
+    ai_model: str = "gpt-4.1-mini"
+    ai_api_key: str | None = None
+    ai_base_url: str = "https://api.openai.com/v1"
+    #: Extra HTTP headers (JSON object) for OpenAI-compatible gateways that
+    #: require routing/affinity headers. Never logged.
+    ai_extra_headers: Annotated[dict[str, str], NoDecode] = Field(default_factory=dict)
+    ai_timeout_seconds: float = 90.0
+    ai_max_retries: int = 3
+    ai_retry_backoff_seconds: float = 2.0
+    ai_requests_per_minute: int = 30
+    #: Hard cap on rendered prompt characters (system + evidence).
+    ai_max_input_chars: int = 24000
+    ai_max_output_tokens: int = 2000
+    ai_temperature: float = 0.1
+    ai_daily_budget_usd: float = 5.0
+    #: Fallback price table used when the provider does not report a cost.
+    ai_price_input_per_1k: float = 0.0
+    ai_price_output_per_1k: float = 0.0
+    #: Data-sharing policy: source snippets may be sent only when enabled.
+    ai_allow_source_sharing: bool = True
+    ai_max_snippet_chars: int = 1200
+    ai_max_snippets: int = 5
+    ai_context_max_evidence: int = 40
+    ai_context_version: str = "1"
+    #: Off by default: prompts may contain repository text. When true the
+    #: rendered prompt is redacted and capped before it is stored.
+    ai_store_prompts: bool = False
+    ai_assistant_max_tool_calls: int = 6
+    #: Automatic post-scan analysis of the highest-risk findings.
+    ai_auto_analyze: bool = True
+    ai_auto_analyze_max_findings: int = 10
+    ai_auto_analyze_min_severity: str = "HIGH"
+
+    # ----------------------------------------------------------------- epss
+    epss_enabled: bool = True
+    epss_url: str = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+    epss_sync_interval_minutes: int = 1440
+
+    # -------------------------------------------------- code evidence capture
+    #: Capture bounded source snippets for findings that have none (Semgrep
+    #: already reports the matched lines). Snippets are stored in the finding
+    #: metadata so later analysis does not need the deleted workspace.
+    capture_code_snippets: bool = True
+    max_snippet_lines: int = 40
+    max_snippet_files: int = 200
+
     # ------------------------------------------------------------- scheduler
     scheduler_enabled: bool = True
     scheduler_poll_seconds: int = 30
@@ -144,6 +199,17 @@ class Settings(BaseSettings):
     @classmethod
     def _expand_path(cls, value: Any) -> Any:
         return Path(str(value)).expanduser()
+
+    @field_validator("ai_extra_headers", "api_key_scopes", mode="before")
+    @classmethod
+    def _parse_extra_headers(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return {}
+            if stripped.startswith("{"):
+                return json.loads(stripped)
+        return value
 
     @property
     def is_production(self) -> bool:

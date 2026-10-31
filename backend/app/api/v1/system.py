@@ -29,6 +29,11 @@ FRESH_EXECUTION_WINDOW = timedelta(days=7)
 @router.get("/info")
 def system_info(principal: CurrentPrincipal) -> dict[str, Any]:
     settings = get_settings()
+    from app.modules.ai.providers.registry import provider_status
+
+    ai = provider_status()
+    # Never expose the key itself, only whether one is present.
+    ai.pop("base_url", None)
     return {
         "name": settings.app_name,
         "version": settings.app_version,
@@ -37,6 +42,7 @@ def system_info(principal: CurrentPrincipal) -> dict[str, Any]:
         "uptime_seconds": round(time.time() - _started_at, 1),
         "scanners_enabled": settings.scanners_enabled,
         "storage_backend": settings.storage_backend,
+        "ai": ai,
     }
 
 
@@ -95,8 +101,8 @@ def dependencies(
     except Exception as exc:  # pragma: no cover - infra failure path
         status["database"] = f"error: {exc}"
     try:
-        storage = get_storage()
-        status["storage"] = "ok" if storage.root.exists() else "missing"
+        get_storage()  # fail fast if the backend is misconfigured
+        status["storage"] = "ok" if get_settings().storage_root.exists() else "missing"
     except Exception as exc:  # pragma: no cover
         status["storage"] = f"error: {exc}"
     return status

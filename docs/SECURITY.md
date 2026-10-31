@@ -16,10 +16,15 @@ and the controls that exist in the code today, plus the limits you must accept.
 | 6 | Accidentally executing repository code | Only scanners run: `git clone`, `syft scan`, `trivy fs`, `semgrep scan`, `gitleaks detect`. None of them execute project builds, tests or scripts. Submodules are not fetched (`--no-recurse-submodules`) |
 | 7 | Resource exhaustion (fork bombs, huge files, runaway scans) | Per-process `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NPROC`, `RLIMIT_CORE`; wall-clock timeouts; process-group kill (`killpg`) on timeout; findings capped per scan; NVD pages capped; Semgrep parallelism limited by `ANS_SEMGREP_JOBS` |
 | 8 | Untrusted scanner output crashing the pipeline | Parsers are defensive (missing keys, wrong types, empty reports, non-JSON output); malformed reports become a `FAILED` execution, not a crash; every parse error is logged with the scanner name |
-| 9 | Prompt-injection style abuse via repository content | Phase 1 has no LLM in the loop; findings are plain data. This becomes relevant when AI analysis is added and must be revisited then |
+| 9 | Prompt-injection style abuse via repository content | Repository text, scanner output and feed data are always passed in a fenced `EVIDENCE` block that the system prompt labels as untrusted data; instruction-like patterns are detected and recorded as `injection_markers` per evidence item; evidence can never change tool availability, output schema or permissions |
 | 10 | Unauthorized API access | Optional API-key auth enforced at router level with constant-time comparison; `ANS_AUTH_ENABLED=true` is required before exposing the platform beyond localhost |
 | 11 | Credential exposure in logs | Logging filters sensitive keys (`token`, `secret`, `password`, `authorization`, …); clone argv contains no token; sync clients never log headers |
 | 12 | Privilege escalation via container | API/worker images run as an unprivileged user (`appuser`, uid 10001); scanners need no privileges since they only read files |
+| 13 | Secrets or source code sent to an LLM provider | Every evidence string passes `redact_text()` (token patterns, `user:pass@` URLs) before it can reach a prompt; Gitleaks evidence is masked at capture; `ANS_AI_ALLOW_SOURCE_SHARING=false` disables snippets entirely; `ANS_AI_STORE_PROMPTS=false` by default, and stored prompts (opt-in) are redacted and capped |
+| 14 | Model invents CVEs, versions or fixes | Prompts carry only authoritative fields; a proposed fixed version must appear in `fixed_versions` **and** pass the deterministic version comparator, otherwise it is discarded and recorded; evidence citations are validated against supplied keys and unknown keys are dropped |
+| 15 | AI silently marking findings safe or fixed | The output schema cannot express "safe"; the strongest negative status is `NO_EVIDENCE_FOUND`; AI never writes `findings.status`; verification status is derived only from scan evidence; any AI failure is recorded as `deterministic_only` |
+| 16 | Runaway model spend / provider outage | Per-minute token bucket, token caps, per-request timeout, bounded retries with jitter, daily budget that fails closed, bounded auto-analysis count; with AI disabled every AI mutation returns `503 ai_unavailable` and the rest of the platform is unaffected |
+| 17 | Assistant used as a data-exfiltration or execution proxy | Fixed read-only tool registry (no SQL, shell, URL or filesystem tool), typed argument validation, `Principal.asset_scope` enforced per call, full transcript in `assistant_messages` |
 
 ## Deliberate limits
 
@@ -35,8 +40,17 @@ and the controls that exist in the code today, plus the limits you must accept.
 * **NVD/OSV data is untrusted** (it is public, third-party content). Records are
   stored as-received with source identifiers preserved; CVSS is only computed
   from published vectors.
-* **API keys are static.** There is no user model, RBAC or audit of API keys in
-  Phase 1; rotate keys by editing `ANS_API_KEYS` and restarting the API.
+* **API keys are static.** There is no user model or RBAC; asset-level scoping is
+  configured per key (`ANS_API_KEY_SCOPES`). Rotate keys by editing `ANS_API_KEYS`
+  and restarting the API.
+* **The model provider is a trust boundary.** Anything sent to the provider leaves
+  your infrastructure. Redaction removes credential-shaped strings, but source
+  snippets are still your code: keep `ANS_AI_ALLOW_SOURCE_SHARING=false` for
+  repositories you are not allowed to share, or point `ANS_AI_BASE_URL` at a
+  self-hosted compatible endpoint.
+* **Verification stops at scan evidence.** There is no deployment integration, so
+  "verified fixed" means "the vulnerable version and finding are gone from a fresh
+  scan", not "production is safe". The API says so explicitly.
 
 ## Deployment checklist
 

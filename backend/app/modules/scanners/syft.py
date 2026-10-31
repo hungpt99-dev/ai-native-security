@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -55,12 +55,28 @@ class SbomPackageInfo:
 
 
 @dataclass
+class SbomEdge:
+    """One dependency relationship extracted from the SBOM document."""
+
+    from_ref: str | None
+    to_ref: str
+    from_name: str | None = None
+    from_version: str | None = None
+    to_name: str | None = None
+    to_version: str | None = None
+    relation: str = "DEPENDS_ON"
+
+
+@dataclass
 class SbomDocument:
     content: bytes
     format: str
     spec_version: str | None
     tool_version: str | None
     packages: list[SbomPackageInfo]
+    edges: list[SbomEdge] = field(default_factory=list)
+    #: ``(name_lower, version)`` of packages declared directly by the repository.
+    direct_package_keys: set[tuple[str, str]] = field(default_factory=set)
 
 
 def ecosystem_from_purl(purl: str | None, fallback: str | None = None) -> str | None:
@@ -151,22 +167,34 @@ class SyftGenerator:
 
         raw = report_path.read_bytes()
         payload = json.loads(raw)
-        packages, spec_version = self.parse_result(payload, fmt)
+        packages, spec_version, edges, direct_keys = self.parse_document(payload, fmt)
         return SbomDocument(
             content=raw,
             format=fmt,
             spec_version=spec_version,
             tool_version=version,
             packages=packages,
+            edges=edges,
+            direct_package_keys=direct_keys,
         )
 
     # ------------------------------------------------------------- parsing
-    def parse_result(self, payload: Any, sbom_format: str) -> tuple[list[SbomPackageInfo], str | None]:
+    def parse_document(
+        self, payload: Any, sbom_format: str
+    ) -> tuple[list[SbomPackageInfo], str | None, list[SbomEdge], set[tuple[str, str]]]:
         if not isinstance(payload, dict):
-            return [], None
+            return [], None, [], set()
         if sbom_format == SbomFormat.SPDX_JSON.value:
-            return _parse_spdx(payload)
-        return _parse_cyclonedx(payload)
+            packages, spec_version = _parse_spdx(payload)
+            edges, direct_keys = _spdx_graph(payload, packages)
+            return packages, spec_version, edges, direct_keys
+        packages, spec_version = _parse_cyclonedx(payload)
+        edges, direct_keys = _cyclonedx_graph(payload, packages)
+        return packages, spec_version, edges, direct_keys
+
+    def parse_result(self, payload: Any, sbom_format: str) -> tuple[list[SbomPackageInfo], str | None]:
+        packages, spec_version, _edges, _direct = self.parse_document(payload, sbom_format)
+        return packages, spec_version
 
 
 def _parse_cyclonedx(payload: dict[str, Any]) -> tuple[list[SbomPackageInfo], str | None]:
@@ -249,3 +277,150 @@ def _parse_spdx(payload: dict[str, Any]) -> tuple[list[SbomPackageInfo], str | N
             )
         )
     return packages, str(spec_version) if spec_version else None
+
+
+# --------------------------------------------------------------------- graphs
+def _component_identity(component: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(component.get("name") or "").strip().lower(),
+        str(component.get("version") or "").strip(),
+    )
+
+
+def _cyclonedx_graph(
+    payload: dict[str, Any], packages: list[SbomPackageInfo]
+) -> tuple[list[SbomEdge], set[tuple[str, str]]]:
+    """Extract the ``dependencies`` graph from a CycloneDX document.
+
+    Syft emits ``dependencies`` as ``[{ref, dependsOn: [...]}]`` plus a
+    ``metadata.component`` root. Roots become ``from_ref=None`` edges so
+    "direct dependency" is a property of the graph, not a guess.
+    """
+    if not packages:
+        return [], set()
+    components = payload.get("components") or []
+    identity: dict[str, tuple[str, str]] = {}
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        ref = component.get("bom-ref")
+        if ref:
+            identity[str(ref)] = _component_identity(component)
+
+    metadata_component = payload.get("metadata") or {}
+    root_component = metadata_component.get("component") if isinstance(metadata_component, dict) else None
+    root_ref = root_component.get("bom-ref") if isinstance(root_component, dict) else None
+    if root_ref and isinstance(root_component, dict):
+        identity.setdefault(str(root_ref), _component_identity(root_component))
+
+    dependencies = payload.get("dependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        return [], set()
+
+    if root_ref is None:
+        # Infer the root: the single ref that nothing depends on.
+        refs = {
+            str(entry.get("ref"))
+            for entry in dependencies
+            if isinstance(entry, dict) and entry.get("ref")
+        }
+        targets = {
+            str(target)
+            for entry in dependencies
+            if isinstance(entry, dict)
+            for target in (entry.get("dependsOn") or [])
+        }
+        roots = refs - targets
+        if len(roots) == 1:
+            root_ref = roots.pop()
+
+    edges: list[SbomEdge] = []
+    direct: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str]] = set()
+    for entry in dependencies:
+        if not isinstance(entry, dict):
+            continue
+        from_ref = entry.get("ref")
+        from_key = identity.get(str(from_ref), ("", "")) if from_ref else ("", "")
+        is_root = bool(root_ref) and str(from_ref) == str(root_ref)
+        for target in entry.get("dependsOn") or []:
+            to_key = identity.get(str(target), ("", ""))
+            marker = (str(from_ref), str(target))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            edges.append(
+                SbomEdge(
+                    from_ref=None if is_root else (str(from_ref) if from_ref else None),
+                    to_ref=str(target),
+                    from_name=from_key[0] or None,
+                    from_version=from_key[1] or None,
+                    to_name=to_key[0] or None,
+                    to_version=to_key[1] or None,
+                )
+            )
+            if is_root and to_key[0]:
+                direct.add((to_key[0], to_key[1]))
+    return edges, direct
+
+
+_SPDX_DEPENDENCY_RELATIONS = {"DEPENDS_ON", "CONTAINS"}
+
+
+def _spdx_graph(
+    payload: dict[str, Any], packages: list[SbomPackageInfo]
+) -> tuple[list[SbomEdge], set[tuple[str, str]]]:
+    """Extract relationships from an SPDX document (best effort, no guessing)."""
+    if not packages:
+        return [], set()
+    identity: dict[str, tuple[str, str]] = {}
+    for package in payload.get("packages") or []:
+        if isinstance(package, dict) and package.get("SPDXID"):
+            identity[str(package["SPDXID"])] = (
+                str(package.get("name") or "").strip().lower(),
+                str(package.get("versionInfo") or "").strip(),
+            )
+    relationships = payload.get("relationships") or []
+    root_ids = {str(item) for item in (payload.get("documentDescribes") or [])}
+    for relation in relationships:
+        if (
+            isinstance(relation, dict)
+            and str(relation.get("relationshipType") or "").upper() == "DESCRIBES"
+        ):
+            root_ids.add(str(relation.get("relatedSpdxElement") or ""))
+
+    edges: list[SbomEdge] = []
+    direct: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str]] = set()
+    for relation in relationships:
+        if not isinstance(relation, dict):
+            continue
+        relation_type = str(relation.get("relationshipType") or "").upper()
+        source = str(relation.get("spdxElementId") or "")
+        target = str(relation.get("relatedSpdxElement") or "")
+        if relation_type == "DEPENDENCY_OF":
+            source, target = target, source
+        elif relation_type not in _SPDX_DEPENDENCY_RELATIONS:
+            continue
+        if not source or not target or source == target:
+            continue
+        marker = (source, target)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        from_key = identity.get(source, ("", ""))
+        to_key = identity.get(target, ("", ""))
+        is_root = source in root_ids
+        edges.append(
+            SbomEdge(
+                from_ref=None if is_root else source,
+                to_ref=target,
+                from_name=from_key[0] or None,
+                from_version=from_key[1] or None,
+                to_name=to_key[0] or None,
+                to_version=to_key[1] or None,
+            )
+        )
+        if is_root and to_key[0]:
+            direct.add((to_key[0], to_key[1]))
+    return edges, direct

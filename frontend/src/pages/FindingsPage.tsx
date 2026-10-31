@@ -16,6 +16,7 @@ import {
 } from "@/components/common";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { useAssets, useFinding, useFindings, useUpdateFindingStatus } from "@/hooks/queries";
+import { FindingAiPanel } from "@/components/ai-panel";
 import type { Finding, FindingStatus } from "@/lib/types";
 import { formatDate, formatRelative } from "@/lib/utils";
 
@@ -356,6 +357,8 @@ function FindingDialog({ id, onClose }: { id: string | null; onClose: () => void
                 {JSON.stringify(finding.metadata, null, 2)}
               </pre>
             </div>
+
+            <FindingAiPanel findingId={finding.id} />
 
             <div>
               <p className="label">History</p>

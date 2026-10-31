@@ -14,17 +14,19 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# The unprivileged user and the dependencies are prepared before the application
+# code is copied, so editing source files only re-runs the final COPY layer.
+RUN useradd --create-home --uid 10001 appuser
+
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/ ./
-
-RUN useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/var/sboms /app/var/workspaces \
-    && chown -R appuser:appuser /app/var
-
 # ------------------------------------------------------------------ api image
 FROM base AS api
+
+COPY backend/ ./
+RUN mkdir -p /app/var/sboms /app/var/workspaces \
+    && chown -R appuser:appuser /app/var
 
 USER appuser
 EXPOSE 8000
@@ -54,11 +56,19 @@ RUN chmod +x /usr/local/bin/trivy /usr/local/bin/gitleaks /usr/local/bin/syft \
     && gitleaks version \
     && syft version
 
+COPY backend/ ./
+RUN mkdir -p /app/var/sboms /app/var/workspaces /home/appuser/.cache/trivy \
+    && chown -R appuser:appuser /app/var /home/appuser/.cache
+
 USER appuser
 CMD ["python", "-m", "app.workers.worker"]
 
 # ------------------------------------------------------------- scheduler image
 FROM base AS scheduler
+
+COPY backend/ ./
+RUN mkdir -p /app/var/sboms /app/var/workspaces \
+    && chown -R appuser:appuser /app/var
 
 USER appuser
 CMD ["python", "-m", "app.scheduler.scheduler"]

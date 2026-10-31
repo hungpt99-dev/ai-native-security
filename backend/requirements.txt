@@ -9,3 +9,6 @@ pydantic-settings==2.16.2
 httpx==0.28.1
 cryptography==50.0.2
 python-dateutil==3.0.0
+# Multi-step AI investigation workflow (graph execution, no LLM client of its own).
+langgraph==1.2.19
+langchain-core==1.7.3

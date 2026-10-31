@@ -132,3 +132,25 @@ class VulnerabilitySyncHistory(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         Index("ix_vuln_sync_source_started", "source", "started_at"),
     )
+
+
+class VulnerabilityEpss(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """EPSS exploitation probability for a CVE.
+
+    Kept in its own table (not on ``vulnerabilities``) because the score is a
+    daily time series keyed by CVE only, while vulnerability rows are keyed by
+    ``(source, source_id)`` and several sources can share one CVE.
+    """
+
+    __tablename__ = "vulnerability_epss"
+
+    cve_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    score: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    percentile: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
+    model_version: Mapped[str | None] = mapped_column(String(32))
+    scored_date: Mapped[date | None] = mapped_column(Date)
+
+    __table_args__ = (
+        UniqueConstraint("cve_id", name="uq_vulnerability_epss_cve"),
+        Index("ix_vulnerability_epss_score", "score"),
+    )

@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.enums import JobStatus
+from app.core.enums import JobKind, JobStatus
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -77,8 +77,11 @@ class Schedule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_job_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
 
     __table_args__ = (
+        # Derived from the enum so a new job kind cannot silently miss the
+        # constraint (a mismatch is a runtime insert failure, not a type error).
         CheckConstraint(
-            "kind IN ('SCAN','SYNC_OSV','SYNC_NVD','SYNC_KEV')", name="schedule_kind"
+            "kind IN (" + ",".join(f"'{kind.value}'" for kind in JobKind) + ")",
+            name="schedule_kind",
         ),
         Index("ix_schedules_due", "enabled", "next_run_at"),
     )

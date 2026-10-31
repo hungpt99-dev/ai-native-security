@@ -21,6 +21,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.enums import (
+    ACTIVE_FINDING_STATUSES,
+    SEVERITY_ORDER,
+    JobKind,
+    JobStatus,
     ScannerExecutionStatus,
     ScanStatus,
     Severity,
@@ -29,12 +33,16 @@ from app.core.logging import get_logger
 from app.modules.assets.models import Asset
 from app.modules.assets.service import resolve_access_token
 from app.modules.findings import service as findings_service
+from app.modules.findings.models import Finding
 from app.modules.sbom.service import store_sbom
 from app.modules.scanners.base import NormalizedFinding
 from app.modules.scanners.registry import enabled_scanners, get_syft
 from app.modules.scans.models import Scan, ScannerExecution
+from app.modules.security_intelligence import repository_metadata, snippets
 from app.modules.vulnerabilities.correlation import correlate_packages, enrich_scan_findings
+from app.workers import queue
 from app.workers.checkout import Checkout, cleanup_workspace, clone_repository, workspace_for_scan
+from app.workers.models import Job
 
 logger = get_logger(__name__)
 
@@ -141,6 +149,27 @@ def execute_scan(db: Session, scan_id: uuid.UUID, heartbeat: Heartbeat | None = 
             )
             db.commit()
             raise RuntimeError(f"SBOM generation failed: {exc}") from exc
+
+        # ------------------------- repository facts & bounded code evidence
+        # Best effort: neither is required for a scan to be valid, and a failure
+        # here must not turn a successful scan into a failed one.
+        try:
+            repository_metadata.collect(
+                db,
+                asset_id=asset.id,
+                scan_id=scan.id,
+                packages=packages,
+                workspace=workspace,
+                default_branch=asset.default_branch,
+            )
+            snippets.capture_for_scan(db, scan_id=scan.id, workspace=workspace)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "repository metadata/snippet collection failed",
+                extra={"extra_fields": {"scan_id": str(scan.id)}},
+            )
+            db.rollback()
 
         # --------------------------------------------------------- scanners
         report_dir = settings.workspace_root / f"scan-{scan.id}-reports"
@@ -272,6 +301,89 @@ def execute_scan(db: Session, scan_id: uuid.UUID, heartbeat: Heartbeat | None = 
             }
         },
     )
+
+    # ------------------------------------------------ post-scan integrations
+    # Both hooks are best-effort: a verification or AI failure must never
+    # rewrite the scan's own outcome.
+    if scan.status == ScanStatus.COMPLETED.value:
+        try:
+            from app.modules.verification import service as verification_service
+
+            verifications = verification_service.on_scan_completed(db, scan.id)
+            if verifications:
+                logger.info(
+                    "remediation verifications recorded",
+                    extra={
+                        "extra_fields": {
+                            "scan_id": str(scan.id),
+                            "count": len(verifications),
+                            "statuses": [entry.status for entry in verifications],
+                        }
+                    },
+                )
+        except Exception:
+            logger.exception(
+                "verification hook failed", extra={"extra_fields": {"scan_id": str(scan.id)}}
+            )
+            db.rollback()
+
+    try:
+        queued = _enqueue_auto_analysis(db, scan)
+        if queued:
+            logger.info(
+                "ai analysis queued",
+                extra={"extra_fields": {"scan_id": str(scan.id), "queued": queued}},
+            )
+    except Exception:
+        logger.exception(
+            "ai analysis enqueue failed", extra={"extra_fields": {"scan_id": str(scan.id)}}
+        )
+        db.rollback()
+
+
+def _enqueue_auto_analysis(db: Session, scan: Scan) -> int:
+    """Queue contextual risk analysis for the highest-risk new findings.
+
+    Off by default in spirit (requires ``ai_enabled``) and bounded in count, so a
+    scan can never turn into an unbounded model spend.
+    """
+    settings = get_settings()
+    if not settings.ai_enabled or not settings.ai_auto_analyze:
+        return 0
+    minimum = settings.ai_auto_analyze_min_severity.upper()
+    threshold = SEVERITY_ORDER.get(minimum, SEVERITY_ORDER[Severity.HIGH.value])
+    severities = [name for name, rank in SEVERITY_ORDER.items() if rank <= threshold]
+    rows = db.execute(
+        select(Finding)
+        .where(
+            Finding.last_scan_id == scan.id,
+            Finding.status.in_(ACTIVE_FINDING_STATUSES),
+            Finding.severity.in_(severities),
+        )
+        .order_by(Finding.cvss_score.desc().nullslast(), Finding.severity.asc())
+        .limit(settings.ai_auto_analyze_max_findings)
+    ).scalars().all()
+    if not rows:
+        return 0
+    queued = 0
+    for finding in rows:
+        pending = db.execute(
+            select(Job.id).where(
+                Job.kind == JobKind.AI_RISK.value,
+                Job.payload["finding_id"].astext == str(finding.id),
+                Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+            )
+        ).scalar_one_or_none()
+        if pending:
+            continue
+        queue.enqueue(
+            db,
+            JobKind.AI_RISK,
+            {"finding_id": str(finding.id), "asset_id": str(finding.asset_id)},
+        )
+        queued += 1
+    db.commit()
+    return queued
 
 
 def _checkout(

@@ -10,6 +10,8 @@ import { SbomsPage } from "@/pages/SbomsPage";
 import { SbomDetailPage } from "@/pages/SbomDetailPage";
 import { IntelligencePage } from "@/pages/IntelligencePage";
 import { OperationsPage } from "@/pages/OperationsPage";
+import { RemediationPage } from "@/pages/RemediationPage";
+import { AssistantPage } from "@/pages/AssistantPage";
 
 export function App() {
   return (
@@ -24,6 +26,8 @@ export function App() {
         <Route path="sboms" element={<SbomsPage />} />
         <Route path="sboms/:id" element={<SbomDetailPage />} />
         <Route path="intelligence" element={<IntelligencePage />} />
+        <Route path="remediation" element={<RemediationPage />} />
+        <Route path="assistant" element={<AssistantPage />} />
         <Route path="operations" element={<OperationsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

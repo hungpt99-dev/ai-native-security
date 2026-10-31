@@ -66,6 +66,48 @@ def _run_job(db: Session, job: Job, current_worker: str) -> None:
         sync_source(db, source)
         return
 
+    if job.kind == JobKind.SYNC_EPSS.value:
+        from app.modules.vulnerabilities.sync import sync_epss
+
+        sync_epss(db)
+        return
+
+    if job.kind == JobKind.AI_RISK.value:
+        from app.modules.risk_analysis import service as risk_service
+
+        raw = payload.get("finding_id")
+        if not raw:
+            raise ValueError("AI_RISK job payload is missing finding_id")
+        risk_service.assess(db, uuid.UUID(str(raw)), principal="worker")
+        return
+
+    if job.kind == JobKind.AI_INVESTIGATE.value:
+        from app.modules.ai.services import investigations
+
+        raw = payload.get("finding_id")
+        if not raw:
+            raise ValueError("AI_INVESTIGATE job payload is missing finding_id")
+        investigations.investigate(db, uuid.UUID(str(raw)), principal="worker")
+        return
+
+    if job.kind == JobKind.AI_REMEDIATE.value:
+        from app.modules.remediation import service as remediation_service
+
+        raw = payload.get("finding_id")
+        if not raw:
+            raise ValueError("AI_REMEDIATE job payload is missing finding_id")
+        remediation_service.propose(db, uuid.UUID(str(raw)), principal="worker")
+        return
+
+    if job.kind == JobKind.AI_VERIFY.value:
+        from app.modules.verification import service as verification_service
+
+        raw = payload.get("verification_id")
+        if not raw:
+            raise ValueError("AI_VERIFY job payload is missing verification_id")
+        verification_service.explain(db, uuid.UUID(str(raw)), principal="worker")
+        return
+
     raise ValueError(f"Unsupported job kind: {job.kind}")
 
 

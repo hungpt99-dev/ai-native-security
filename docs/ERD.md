@@ -109,6 +109,26 @@ Queue + history: `kind`, JSONB `payload`, `status` (`QUEUED`, `RUNNING`,
 `run_after`, `locked_at`, `locked_by`, `heartbeat_at`, `last_error`,
 `schedule_id`. Indexed on `(status, run_after)` for claims.
 
+## AI layer tables
+
+| Table | Key columns | Notes |
+| --- | --- | --- |
+| `security_context_snapshots` | `finding_id`, `asset_id`, `scan_id`, `context_version`, `evidence_hash`, `payload`, `missing_information` | append-only; `evidence_hash` makes a context reproducible |
+| `ai_executions` | `kind`, `status`, `provider`, `model`, `prompt_id/version/sha256`, tokens, `cost_usd`, `duration_ms`, `error_code` | one row per model call, success or failure; never prompts or evidence text |
+| `risk_assessments` | `cvss_score`, `deterministic_score`, `ai_risk_score`, `final_score`, `risk_level`, `confidence`, `signals`, `evidence`, `missing_information`, `deterministic_only` | five separate numbers; append-only |
+| `security_investigations` | `finding_id`, `status`, `confidence`, `answers`, `next_steps`, `workflow_name/version` | five fixed statuses; `NO_EVIDENCE_FOUND` is not "safe" |
+| `investigation_evidence` | `investigation_id`, `evidence_key`, `kind`, `locator`, `sha256`, `excerpt` | `evidence_key` is what the model cites |
+| `remediation_recommendations` | `strategy`, `status`, `current_version`, `recommended_version`, `version_verified`, `patch`, `approved_by` | version must be backed by intel; nothing is applied |
+| `remediation_verifications` | `status`, `before_version`, `after_version`, `finding_present_after`, `new_findings_count`, `policy_result` | derived only from scan evidence |
+| `security_decisions` | `decision_type`, `actor`, `reason`, `finding_status`, `remediation_status` | immutable human decision log |
+| `ai_feedback` | `verdict`, `comment`, `risk_assessment_id`, `recommendation_id` | stored, never used to fine-tune |
+| `assistant_conversations` / `assistant_messages` | `principal`, `role`, `tool_calls`, `tool_results`, `cited_finding_ids` | full audit of assistant actions |
+| `security_policies` | `key`, `version`, `kind`, `config`, `active` | policy as data, recorded on every assessment |
+| `asset_security_profiles` | `asset_id` (PK), `criticality`, `environment`, `internet_exposed`, `business_importance`, `data_sensitivity`, `owner_team` | all nullable: NULL means "not configured" |
+| `asset_repository_metadata` | `asset_id` (PK), `languages`, `frameworks`, `manifests`, `collected_at` | derived from scans, no LLM |
+| `sbom_package_edges` | `sbom_id`, `from_ref`, `to_ref`, `from_name`, `to_name` | dependency graph; `from_ref NULL` = direct dependency |
+| `vulnerability_epss` | `cve_id` (unique), `score`, `percentile`, `scored_date` | daily FIRST feed, keyed by CVE |
+
 ## Relationship notes
 
 * Deleting an asset cascades to its scans, findings, SBOMs and derived package

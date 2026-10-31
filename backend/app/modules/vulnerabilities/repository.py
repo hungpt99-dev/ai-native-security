@@ -11,6 +11,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Iterable
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -160,7 +161,7 @@ def bulk_upsert(db: Session, records: Iterable[VulnerabilityRecord]) -> tuple[in
 
 
 def apply_kev_flags(
-    db: Session, cve_ids: Iterable[str], *, due_dates: dict[str, object] | None = None
+    db: Session, cve_ids: Iterable[str], *, due_dates: dict[str, Any] | None = None
 ) -> int:
     """Mark already-stored OSV/NVD records as KEV when a CVE is exploited."""
     ids = [c for c in {str(cve).upper() for cve in cve_ids} if c]
