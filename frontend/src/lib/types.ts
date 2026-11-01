@@ -95,6 +95,7 @@ export interface Finding {
   cve_id: string | null;
   cvss_score: number | null;
   status: FindingStatus;
+  discovery_source: string;
   metadata: Record<string, unknown>;
   first_detected_at: string;
   last_detected_at: string;
@@ -127,6 +128,155 @@ export interface Sbom {
   size_bytes: number;
   package_count: number;
   created_at: string;
+  commit_sha: string | null;
+  branch: string | null;
+  dependency_fingerprint: string | null;
+  manifest_fingerprint: string | null;
+  artifact_digest: string | null;
+  creation_reason: string | null;
+  generation_status: string | null;
+  previous_snapshot_id: string | null;
+  generated_at: string | null;
+  direct_package_count: number | null;
+  transitive_package_count: number | null;
+}
+
+export type SbomFreshness = "MISSING" | "CURRENT" | "STALE" | "PENDING" | "FAILED" | "UNKNOWN";
+
+export type MonitoringRunKind =
+  | "DEPENDENCY_CHECK"
+  | "SBOM_GENERATION"
+  | "VULNERABILITY_REASSESSMENT";
+
+export type MonitoringRunStatus = "RUNNING" | "SUCCEEDED" | "PARTIAL" | "FAILED" | "SKIPPED";
+
+export interface MonitoringRun {
+  id: string;
+  asset_id: string;
+  sbom_id: string | null;
+  job_id: string | null;
+  kind: MonitoringRunKind;
+  trigger: string;
+  status: MonitoringRunStatus;
+  outcome: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  head_commit_sha: string | null;
+  previous_commit_sha: string | null;
+  branch: string | null;
+  dependency_fingerprint: string | null;
+  previous_dependency_fingerprint: string | null;
+  components_evaluated: number;
+  findings_created: number;
+  findings_updated: number;
+  findings_resolved: number;
+  new_kev_findings: number;
+  failure_count: number;
+  skipped_reason: string | null;
+  error_message: string | null;
+  metrics: Record<string, unknown>;
+}
+
+export interface SbomSnapshotSummary {
+  id: string;
+  created_at: string | null;
+  generated_at: string | null;
+  commit_sha: string | null;
+  branch: string | null;
+  dependency_fingerprint: string | null;
+  manifest_fingerprint: string | null;
+  artifact_digest: string | null;
+  sha256: string;
+  creation_reason: string;
+  generation_status: string;
+  package_count: number;
+  direct_package_count: number | null;
+  transitive_package_count: number | null;
+  previous_snapshot_id: string | null;
+  size_bytes: number;
+  format: string;
+}
+
+export interface SbomStatus {
+  asset_id: string;
+  monitoring_enabled: boolean;
+  sbom_monitoring_enabled: boolean;
+  monitoring_status: "HEALTHY" | "DEGRADED" | "UNKNOWN" | "RUNNING" | "DISABLED";
+  freshness: SbomFreshness;
+  freshness_detail: string;
+  latest_snapshot: SbomSnapshotSummary | null;
+  vulnerable_components: number;
+  pending: {
+    dependency_check: boolean;
+    sbom_generation: boolean;
+    reassessment: boolean;
+    dependency_change_pending: boolean;
+  };
+  last_dependency_check: MonitoringRun | null;
+  last_generation: MonitoringRun | null;
+  last_reassessment: MonitoringRun | null;
+  next_dependency_check: string | null;
+  next_reassessment: string | null;
+  failed_evaluations_7d: number;
+  new_findings_since_last_evaluation: number;
+  new_kev_since_last_evaluation: number;
+}
+
+export type SbomChangeType = "ADDED" | "REMOVED" | "VERSION_CHANGED" | "UNCHANGED";
+
+export interface ComponentChange {
+  change: SbomChangeType;
+  identity: string;
+  identity_basis: string;
+  name: string;
+  ecosystem: string | null;
+  purl: string | null;
+  version_before: string | null;
+  version_after: string | null;
+  is_direct_before: boolean | null;
+  is_direct_after: boolean | null;
+}
+
+export interface SbomDiff {
+  previous_sbom_id: string | null;
+  current_sbom_id: string | null;
+  added: number;
+  removed: number;
+  version_changed: number;
+  unchanged: number;
+  changed: number;
+  total_previous: number;
+  total_current: number;
+  items: ComponentChange[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+}
+
+export interface MonitoringSummary {
+  window_days: number;
+  dependency_checks: number;
+  dependency_changes_detected: number;
+  dependency_checks_unchanged: number;
+  dependency_checks_unknown: number;
+  sbom_generations: number;
+  sbom_generations_skipped_unchanged: number;
+  reassessments: number;
+  reassessment_failures: number;
+  components_evaluated: number;
+  findings_created: number;
+  findings_updated: number;
+  findings_resolved: number;
+  new_kev_findings: number;
+  avg_dependency_check_ms: number | null;
+  avg_generation_ms: number | null;
+  avg_reassessment_ms: number | null;
+  estimated_full_scans_avoided: number;
+  estimated_repository_checkouts_avoided: number;
+  estimated_scanner_executions_avoided: number;
+  estimate_basis: string;
 }
 
 export interface SbomPackage {

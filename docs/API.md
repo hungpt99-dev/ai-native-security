@@ -114,11 +114,97 @@ An illegal transition returns `409` with the allowed set. `RESOLVED` sets
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/sboms` | list (`asset_id`) |
-| GET | `/sboms/{id}` | metadata |
+| GET | `/sboms/{id}` | metadata incl. provenance (commit, fingerprints, origin, lineage) |
 | GET | `/sboms/{id}/packages` | package inventory (`search`, `ecosystem`, pagination) |
 | GET | `/sboms/{id}/download` | download the document (`application/json`) |
+| GET | `/sboms/{id}/diff` | component diff vs `against` (defaults to the recorded predecessor) |
 
 Documents are served from object storage; the database holds metadata only.
+
+`GET /sboms/{id}/diff` parameters: `against` (snapshot id, must belong to the
+same asset — `422` otherwise), `change` ∈ {`ADDED`, `REMOVED`,
+`VERSION_CHANGED`, `UNCHANGED`} (default: all changes, unchanged components
+excluded), plus pagination. Response:
+
+```json
+{
+  "previous_sbom_id": "…",
+  "current_sbom_id": "…",
+  "added": 2, "removed": 1, "version_changed": 3, "unchanged": 740,
+  "changed": 6, "total_previous": 744, "total_current": 745,
+  "items": [{"change": "VERSION_CHANGED", "identity": "pkg:pypi/requests",
+             "identity_basis": "purl", "name": "requests",
+             "version_before": "2.31.0", "version_after": "2.32.0",
+             "is_direct_before": true, "is_direct_after": true}],
+  "total": 6, "page": 1, "page_size": 50, "pages": 1
+}
+```
+
+Identity is the PURL without its version (then `ecosystem:name`, then `name`), so
+a version bump is a change rather than an add + remove, and two ecosystems that
+ship the same package name stay separate.
+
+## SBOM lifecycle and continuous monitoring
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/assets/{id}/sbom/status` | snapshot overview, freshness, monitoring state, next runs |
+| POST | `/assets/{id}/sbom/check` | enqueue a dependency change check (202) |
+| POST | `/assets/{id}/sbom/generate` | enqueue an SBOM-only generation (202) |
+| POST | `/assets/{id}/sbom/reassess` | enqueue a vulnerability reassessment (202, optional `sbom_id`) |
+| GET | `/assets/{id}/sbom/monitoring-runs` | run history (`kind`, `status`, pagination) |
+| GET | `/sbom/monitoring/summary` | period counters + estimated scans avoided (`days`, default 30) |
+
+Action endpoints return `202` and are idempotent: they never run work in the
+request, and a duplicate request while an equivalent job is queued returns
+`{"deduplicated": true, "job_id": "<existing>"}`.
+
+`GET /assets/{id}/sbom/status` (abridged):
+
+```json
+{
+  "monitoring_status": "DEGRADED",
+  "freshness": "STALE",
+  "freshness_detail": "dependency inputs changed since this snapshot was generated",
+  "latest_snapshot": {"id": "…", "commit_sha": "…", "dependency_fingerprint": "…",
+                      "creation_reason": "FULL_SCAN", "package_count": 773,
+                      "direct_package_count": null, "generated_at": "…"},
+  "vulnerable_components": 4,
+  "pending": {"dependency_check": false, "sbom_generation": true,
+              "reassessment": false, "dependency_change_pending": true},
+  "last_dependency_check": {"status": "SUCCEEDED", "outcome": "DEPENDENCY_CHANGED", "…": "…"},
+  "last_reassessment": {"status": "SUCCEEDED", "components_evaluated": 773, "…": "…"},
+  "next_dependency_check": "…", "next_reassessment": "…",
+  "failed_evaluations_7d": 0,
+  "new_findings_since_last_evaluation": 3,
+  "new_kev_since_last_evaluation": 1
+}
+```
+
+`freshness` ∈ {`MISSING`, `CURRENT`, `STALE`, `PENDING`, `FAILED`, `UNKNOWN`}.
+`UNKNOWN` means the platform could not verify composition (no check since the
+snapshot, or the provider failed) — it is never reported as current.
+
+## Webhooks
+
+| Method | Path | Authentication |
+| --- | --- | --- |
+| POST | `/api/v1/webhooks/github` | `X-Hub-Signature-256` HMAC-SHA256 over the raw body |
+| POST | `/api/v1/webhooks/gitlab` | `X-Gitlab-Token` shared secret |
+| GET | `/api/v1/webhooks/health` | none (liveness only) |
+
+Webhook routes are mounted **outside** the API-key router because a provider
+cannot send `X-API-Key`. They verify the provider signature against
+`ANS_WEBHOOK_SECRET` (503 `webhook_disabled` when unset), ignore non-push
+events, ignore pushes to branches other than the asset's default branch, and
+enqueue only a lightweight dependency check. Deliveries are deduplicated by
+`(provider, delivery_id)`; a replay returns `202 {"status": "DUPLICATE"}` and
+enqueues nothing.
+
+```json
+{"status": "ENQUEUED", "provider": "github", "delivery_id": "…",
+ "reason": "2 dependency input(s) changed", "asset_id": "…", "job_id": "…"}
+```
 
 ## Vulnerabilities (intelligence)
 

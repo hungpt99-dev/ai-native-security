@@ -21,6 +21,7 @@ def findings_query(
     statuses: Sequence[str] | None = None,
     search: str | None = None,
     cve_id: str | None = None,
+    discovery_sources: Sequence[str] | None = None,
 ) -> Select:
     stmt: Select = select(Finding)
     if asset_id:
@@ -35,6 +36,10 @@ def findings_query(
         stmt = stmt.where(Finding.status.in_([s.upper() for s in statuses]))
     if cve_id:
         stmt = stmt.where(Finding.cve_id == cve_id.upper())
+    if discovery_sources:
+        stmt = stmt.where(
+            Finding.discovery_source.in_([s.upper() for s in discovery_sources])
+        )
     if search:
         pattern = f"%{search.strip()}%"
         stmt = stmt.where(

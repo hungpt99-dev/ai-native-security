@@ -46,12 +46,24 @@ jobs:
       - name: Migration up/down/up
         working-directory: backend
         env:
-          ANS_DATABASE_URL: postgresql+psycopg://security:security@localhost:5432/security_test
+          ANS_DATABASE_URL: postgresql+psycopg://security:security@localhost:5432/security_mig
           ANS_SECRET_KEY: ci-secret
         run: |
+          # A dedicated database: the test suite already built the head schema in
+          # security_test, so applying the migration chain there would collide.
+          python - <<'PY'
+          import psycopg
+
+          with psycopg.connect(
+              "postgresql://security:security@localhost:5432/postgres", autocommit=True
+          ) as connection:
+              connection.execute("DROP DATABASE IF EXISTS security_mig")
+              connection.execute("CREATE DATABASE security_mig")
+          PY
           alembic upgrade head
           alembic downgrade -1
           alembic upgrade head
+          alembic current
 
   frontend:
     runs-on: ubuntu-latest

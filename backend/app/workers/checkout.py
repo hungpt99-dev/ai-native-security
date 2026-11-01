@@ -36,14 +36,23 @@ class Checkout:
     provider: str
 
 
-def workspace_for_scan(scan_id: uuid.UUID) -> Path:
+def workspace_for(prefix: str, token: object) -> Path:
+    """Fresh workspace directory for a scan or an SBOM-only update."""
     root = get_settings().workspace_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    workspace = root / f"scan-{scan_id}"
+    workspace = root / f"{prefix}-{token}"
     if workspace.exists():
         shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True, exist_ok=False)
     return workspace
+
+
+def workspace_for_scan(scan_id: uuid.UUID) -> Path:
+    return workspace_for("scan", scan_id)
+
+
+def workspace_for_sbom(snapshot_token: uuid.UUID) -> Path:
+    return workspace_for("sbom", snapshot_token)
 
 
 def build_clone_url(repo_url: str) -> str:
@@ -52,7 +61,7 @@ def build_clone_url(repo_url: str) -> str:
     return reference.url
 
 
-def _auth_arguments(repo_url: str, token: str | None) -> list[str]:
+def auth_arguments(repo_url: str, token: str | None) -> list[str]:
     """Return git ``-c`` arguments carrying an auth header for private repos."""
     if not token:
         return []
@@ -60,6 +69,59 @@ def _auth_arguments(repo_url: str, token: str | None) -> list[str]:
     credential = f"oauth2:{token}" if reference.provider == "gitlab" else f"x-access-token:{token}"
     encoded = base64.b64encode(credential.encode()).decode()
     return ["-c", f"http.extraHeader=AUTHORIZATION: basic {encoded}"]
+
+
+def remote_head(
+    *,
+    repo_url: str,
+    branch: str,
+    token: str | None = None,
+    timeout: int = 60,
+) -> str | None:
+    """Resolve the head SHA with ``git ls-remote`` — metadata only, no clone.
+
+    This is the fallback when the provider REST API is unavailable. It still
+    transfers no repository content: only refs.
+    """
+    url = build_clone_url(repo_url)
+    branch = validate_branch_name(branch)
+    command = [
+        "git",
+        *auth_arguments(url, token),
+        "-c",
+        "core.hooksPath=/dev/null",
+        "ls-remote",
+        "--heads",
+        url,
+        f"refs/heads/{branch}",
+    ]
+    result = run_command(
+        command,
+        cwd=Path("/tmp"),  # noqa: S108 - neutral cwd, no repository content touched
+        timeout=timeout,
+        extra_env={
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_ASKPASS": "/bin/true",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        },
+    )
+    if result.exit_code != 0:
+        logger.warning(
+            "git ls-remote failed",
+            extra={
+                "extra_fields": {
+                    "branch": branch,
+                    "exit_code": result.exit_code,
+                    "stderr": result.stderr_excerpt[-500:],
+                }
+            },
+        )
+        return None
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == f"refs/heads/{branch}":
+            return parts[0][:64]
+    return None
 
 
 def clone_repository(
@@ -75,7 +137,7 @@ def clone_repository(
 
     command = [
         "git",
-        *_auth_arguments(url, token),
+        *auth_arguments(url, token),
         "-c",
         "core.hooksPath=/dev/null",
         "-c",

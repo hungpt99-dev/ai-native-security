@@ -121,3 +121,49 @@ Order chosen so that every later feature consumes verified data from the previou
 4. Missing evidence lowers confidence, never risk; `NO_EVIDENCE_FOUND` is not "safe".
 5. All model traffic goes through the provider abstraction; no business module imports a provider.
 6. Deterministic work (matching, version maths, policy, verification) never calls a model.
+
+## 5. SBOM lifecycle audit (this change)
+
+Audited before implementing, against commit `a07a081` and the running stack.
+
+| Capability | Before | After | Where |
+| --- | --- | --- | --- |
+| SBOM generation | Working (Syft inside the scan) | Reused unchanged; provenance added | `modules/scanners/syft.py`, `workers/pipeline.py` |
+| SBOM persistence + inventory | Working (`sboms`, `sbom_packages`, storage abstraction) | Extended with commit/branch/fingerprints/lineage; no second implementation | `modules/sbom/{models,service}.py` |
+| Immutable history | Implicit (rows are never updated) | Explicit: lineage column + tests proving old rows/documents are unchanged | `tests/integration/test_sbom_lifecycle.py` |
+| Dependency change detection | Missing — scans were the only trigger | New: path classification + fingerprints, no clone | `modules/sbom/dependencies.py`, `modules/sbom/lifecycle.py` |
+| SBOM update without scanners | Missing | New `SBOM_GENERATE` job (checkout + Syft only) | `workers/worker.py` |
+| SBOM diff | Missing | New deterministic engine, PURL identity | `modules/sbom/diff.py` |
+| Continuous reassessment | Missing — OSV was only queried during a scan | New stored-inventory correlation reusing version maths and findings | `modules/vulnerabilities/reassessment.py` |
+| Finding provenance | Single implicit path | `discovery_source` + `evidence_sources`, dedupe unchanged | `modules/findings/{models,service}.py` |
+| Job queue | Working (`jobs`, `FOR UPDATE SKIP LOCKED`, backoff, stale recovery) | Reused; added idempotent enqueue + three job kinds | `workers/queue.py`, `core/enums.py` |
+| Scheduler | Working (advisory lock, per-asset scan schedule) | Reused; added per-asset SBOM check + daily reassessment schedules | `scheduler/scheduler.py` |
+| Webhooks | Missing | New: signature verification, delivery log, idempotent enqueue | `modules/git_provider/*`, `api/v1/webhooks.py` |
+| API | SBOM read endpoints only | Additive: status, actions, monitoring runs, diff, summary | `api/v1/sbom_monitoring.py` |
+| Frontend | SBOM list/detail | List/detail extended, compare page, monitoring panel on the asset page | `frontend/src/pages/*` |
+| Observability | Scan/correlation logs | Structured run rows + counters + estimated scans avoided | `modules/sbom/lifecycle.py` |
+
+Reuse decisions (no duplication):
+
+* one SBOM engine (Syft adapter), one storage path (`store_sbom`), one checkout
+  (`clone_repository`), one queue, one diff, one version comparator
+  (`security_intelligence/versions.py`), one finding ingestion path
+  (`findings.service.record_findings`), one enrichment path
+  (`correlation.enrich_findings`).
+* The dependency-file registry replaced the private manifest list in
+  `security_intelligence/repository_metadata.py` (`detect_manifests` now calls
+  `is_manifest_path`), so the two cannot drift.
+
+Known limitations recorded rather than hidden:
+
+* Snapshots created before this change have `commit_sha`/fingerprints `NULL`;
+  they are treated as "composition identity unknown" and never used as a
+  dependency-fingerprint baseline. The first new snapshot establishes it.
+* `artifact_digest` is always `NULL` today: SBOMs are generated from directory
+  scans, not from build artifacts. It exists so an artifact-based generator can
+  record it without reusing the document checksum.
+* A truncated provider compare payload is treated as "possibly changed"
+  (conservative: an extra SBOM generation rather than a missed dependency).
+* Ecosystems outside the Syft/OSV mapping (e.g. exotic package managers) are
+  inventoried but not correlated; they are counted as evaluated without intel
+  matches, never as safe.

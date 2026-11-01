@@ -30,6 +30,8 @@ class FindingRead(BaseModel):
     cve_id: str | None
     cvss_score: float | None
     status: str
+    #: FULL_SCAN or SBOM_REASSESSMENT — how the finding was first discovered.
+    discovery_source: str = "FULL_SCAN"
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_json")
     first_detected_at: datetime
     last_detected_at: datetime

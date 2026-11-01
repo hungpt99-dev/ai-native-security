@@ -300,6 +300,11 @@ function FindingDialog({ id, onClose }: { id: string | null; onClose: () => void
               <SeverityBadge severity={finding.severity} />
               <FindingStatusBadge status={finding.status} />
               <span className="font-mono text-xs text-slate-400">{finding.scanner}</span>
+              {finding.discovery_source === "SBOM_REASSESSMENT" ? (
+                <span className="rounded-full border border-cyan-500/40 bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase text-cyan-300">
+                  from stored SBOM
+                </span>
+              ) : null}
               {finding.cve_id ? <span className="font-mono text-xs text-amber-300">{finding.cve_id}</span> : null}
               {finding.cvss_score !== null ? (
                 <span className="text-xs text-slate-400">CVSS {finding.cvss_score}</span>

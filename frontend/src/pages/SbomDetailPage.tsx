@@ -1,14 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Download } from "lucide-react";
+import { ArrowLeft, Download, GitCompare } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
-import { KeyValue, ErrorState, Mono, PageHeader, Pagination } from "@/components/common";
+import { ErrorState, KeyValue, Mono, PageHeader, Pagination } from "@/components/common";
 import { EmptyState } from "@/components/common";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { useSbom, useSbomPackages } from "@/hooks/queries";
 import { downloadUrl } from "@/lib/api";
-import { formatBytes, formatDate } from "@/lib/utils";
+import { formatBytes, formatDate, shortSha } from "@/lib/utils";
 
 export function SbomDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -38,14 +38,24 @@ export function SbomDetailPage() {
       </Link>
       <PageHeader
         title={`SBOM ${sbom.id.slice(0, 8)}`}
-        subtitle={`${sbom.format.replace("_", " ")} · ${sbom.package_count} packages`}
+        subtitle={`${sbom.format.replace("_", " ")} · ${sbom.package_count} components · ${sbom.creation_reason ?? "unknown origin"}`}
         actions={
-          <a
-            href={downloadUrl(`/sboms/${sbom.id}/download`)}
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-cyan-500 px-4 text-sm font-medium text-slate-950 hover:bg-cyan-400"
-          >
-            <Download className="h-4 w-4" /> Download
-          </a>
+          <>
+            {sbom.previous_snapshot_id ? (
+              <Link
+                to={`/sboms/${sbom.id}/compare`}
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-700 px-4 text-sm font-medium text-slate-200 hover:border-cyan-500/50 hover:text-white"
+              >
+                <GitCompare className="h-4 w-4" /> Compare with previous
+              </Link>
+            ) : null}
+            <a
+              href={downloadUrl(`/sboms/${sbom.id}/download`)}
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-cyan-500 px-4 text-sm font-medium text-slate-950 hover:bg-cyan-400"
+            >
+              <Download className="h-4 w-4" /> Download
+            </a>
+          </>
         }
       />
 
@@ -62,9 +72,14 @@ export function SbomDetailPage() {
             <KeyValue label="Tool">
               {sbom.tool_name} {sbom.tool_version ?? ""}
             </KeyValue>
-            <KeyValue label="Packages">{sbom.package_count}</KeyValue>
+            <KeyValue label="Components">
+              {sbom.package_count}
+              {sbom.direct_package_count !== null
+                ? ` · ${sbom.direct_package_count} direct · ${sbom.transitive_package_count ?? 0} transitive`
+                : " · dependency graph unavailable"}
+            </KeyValue>
             <KeyValue label="Size">{formatBytes(sbom.size_bytes)}</KeyValue>
-            <KeyValue label="SHA-256">
+            <KeyValue label="Document SHA-256">
               <Mono className="break-all">{sbom.sha256.slice(0, 24)}…</Mono>
             </KeyValue>
             <KeyValue label="Asset">
@@ -78,7 +93,49 @@ export function SbomDetailPage() {
                   {sbom.scan_id.slice(0, 8)}
                 </Link>
               ) : (
-                "—"
+                "— (not produced by a full scan)"
+              )}
+            </KeyValue>
+          </dl>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Snapshot provenance</CardTitle>
+          <p className="text-xs text-slate-500">
+            Four different identifiers: the document checksum, the resolved composition, the declared
+            inputs and the Git state are never the same thing.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <KeyValue label="Generated at">{formatDate(sbom.generated_at ?? sbom.created_at)}</KeyValue>
+            <KeyValue label="Creation reason">{sbom.creation_reason ?? "—"}</KeyValue>
+            <KeyValue label="Generation status">{sbom.generation_status ?? "—"}</KeyValue>
+            <KeyValue label="Branch">
+              <Mono>{sbom.branch ?? "—"}</Mono>
+            </KeyValue>
+            <KeyValue label="Commit">
+              <Mono className="break-all">{sbom.commit_sha ?? "not recorded"}</Mono>
+            </KeyValue>
+            <KeyValue label="Dependency fingerprint">
+              <Mono className="break-all">{sbom.dependency_fingerprint ?? "—"}</Mono>
+            </KeyValue>
+            <KeyValue label="Manifest fingerprint">
+              <Mono className="break-all">{sbom.manifest_fingerprint ?? "—"}</Mono>
+            </KeyValue>
+            <KeyValue label="Artifact digest">{sbom.artifact_digest ?? "not applicable"}</KeyValue>
+            <KeyValue label="Previous snapshot">
+              {sbom.previous_snapshot_id ? (
+                <Link
+                  to={`/sboms/${sbom.previous_snapshot_id}`}
+                  className="font-mono text-xs text-cyan-400 hover:underline"
+                >
+                  {shortSha(sbom.previous_snapshot_id)}
+                </Link>
+              ) : (
+                "none recorded"
               )}
             </KeyValue>
             <KeyValue label="Created">{formatDate(sbom.created_at)}</KeyValue>

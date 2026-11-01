@@ -8,10 +8,12 @@ from datetime import UTC, datetime
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
+from app.core.enums import SbomGenerationStatus, SbomSnapshotReason
 from app.core.errors import NotFoundError
 from app.core.logging import get_logger
 from app.core.pagination import PageParams, paginate
 from app.core.storage import StorageBackend, get_storage
+from app.modules.sbom.dependencies import dependency_fingerprint as dependency_fingerprint_of
 from app.modules.sbom.models import Sbom, SbomPackage, SbomPackageEdge
 from app.modules.scanners.syft import SbomDocument
 
@@ -25,11 +27,35 @@ def store_sbom(
     scan_id: uuid.UUID | None,
     document: SbomDocument,
     storage: StorageBackend | None = None,
+    commit_sha: str | None = None,
+    branch: str | None = None,
+    creation_reason: str = SbomSnapshotReason.FULL_SCAN.value,
+    manifest_fingerprint: str | None = None,
+    dependency_fingerprint: str | None = None,
+    artifact_digest: str | None = None,
+    previous_snapshot_id: uuid.UUID | None = None,
+    generated_at: datetime | None = None,
 ) -> Sbom:
+    """Persist an immutable snapshot: document to storage, inventory to rows.
+
+    The document is written before the row, and the row is never updated
+    afterwards. ``previous_snapshot_id`` records the lineage so a diff can be
+    served without guessing which snapshot came before this one.
+    """
     storage = storage or get_storage()
     stamp = datetime.now(UTC).strftime("%Y/%m/%d")
     key = f"sboms/{asset_id}/{stamp}/{uuid.uuid4()}.json"
     storage.put(key, document.content)
+
+    direct_keys = document.direct_package_keys
+    graph_available = bool(direct_keys or document.edges)
+    direct_count: int | None = None
+    if graph_available:
+        direct_count = sum(
+            1
+            for package in document.packages
+            if (package.name.lower(), package.version) in direct_keys
+        )
 
     sbom = Sbom(
         asset_id=asset_id,
@@ -43,6 +69,20 @@ def store_sbom(
         size_bytes=len(document.content),
         package_count=len(document.packages),
         source_type="filesystem",
+        commit_sha=commit_sha,
+        branch=branch,
+        creation_reason=creation_reason,
+        generation_status=SbomGenerationStatus.READY.value,
+        manifest_fingerprint=manifest_fingerprint,
+        dependency_fingerprint=dependency_fingerprint
+        or dependency_fingerprint_of(document.packages),
+        artifact_digest=artifact_digest,
+        previous_snapshot_id=previous_snapshot_id,
+        generated_at=generated_at or datetime.now(UTC),
+        direct_package_count=direct_count,
+        transitive_package_count=(
+            len(document.packages) - direct_count if direct_count is not None else None
+        ),
     )
     db.add(sbom)
     db.flush()
@@ -157,6 +197,42 @@ def latest_sbom_for_asset(db: Session, asset_id: uuid.UUID) -> Sbom | None:
     return db.execute(
         select(Sbom)
         .where(Sbom.asset_id == asset_id)
+        .order_by(Sbom.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def packages_for_sbom(
+    db: Session, sbom_id: uuid.UUID, *, limit: int | None = None
+) -> list[SbomPackage]:
+    """Load a snapshot's full inventory in a deterministic order.
+
+    Reassessment and diffing both need the complete inventory (not a page), so
+    this returns all rows up to an explicit safety ceiling.
+    """
+    stmt = (
+        select(SbomPackage)
+        .where(SbomPackage.sbom_id == sbom_id)
+        .order_by(SbomPackage.name.asc(), SbomPackage.version.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list(db.execute(stmt).scalars())
+
+
+def previous_snapshot(db: Session, sbom: Sbom) -> Sbom | None:
+    """The snapshot this one replaced, using the recorded lineage first.
+
+    Snapshot rows written before the lineage column existed fall back to
+    "newest snapshot created earlier for the same asset".
+    """
+    if sbom.previous_snapshot_id:
+        previous = db.get(Sbom, sbom.previous_snapshot_id)
+        if previous is not None:
+            return previous
+    return db.execute(
+        select(Sbom)
+        .where(Sbom.asset_id == sbom.asset_id, Sbom.created_at < sbom.created_at)
         .order_by(Sbom.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()

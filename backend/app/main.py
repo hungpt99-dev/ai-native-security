@@ -85,6 +85,11 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+    # Webhooks authenticate with the provider signature, so they are mounted
+    # outside the API-key router (a provider cannot send X-API-Key).
+    from app.api.v1.webhooks import router as webhook_router
+
+    app.include_router(webhook_router, prefix=settings.api_v1_prefix)
 
     @app.get("/healthz", tags=["health"], summary="Liveness probe")
     def healthz() -> dict[str, str]:

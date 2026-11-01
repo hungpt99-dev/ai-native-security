@@ -73,10 +73,18 @@ def _upsert_schedule(
 
 
 def sync_asset_schedules(db: Session) -> int:
-    """Create/refresh one scan schedule per monitored asset."""
+    """Create/refresh one scan schedule and one SBOM check schedule per asset.
+
+    Full scans and lightweight dependency checks are deliberately separate
+    schedules: monitoring composition must not require a full scan, and its
+    interval is independent (and much shorter) than the scan interval.
+    """
     settings = get_settings()
+    from app.modules.sbom.lifecycle import DEPENDENCY_CHECK_SCHEDULE_PREFIX
+
     assets = db.execute(select(Asset).where(Asset.monitoring_enabled.is_(True))).scalars().all()
     active_names: set[str] = set()
+    active_check_names: set[str] = set()
     for asset in assets:
         minutes = asset.scan_interval_minutes or settings.scanner_schedule_interval_minutes
         name = f"asset-scan:{asset.id}"
@@ -88,9 +96,24 @@ def sync_asset_schedules(db: Session) -> int:
             interval_seconds=max(300, minutes * 60),
             payload={"asset_id": str(asset.id)},
         )
+        check_name = f"{DEPENDENCY_CHECK_SCHEDULE_PREFIX}{asset.id}"
+        active_check_names.add(check_name)
+        _upsert_schedule(
+            db,
+            name=check_name,
+            kind=JobKind.SBOM_CHANGE_CHECK,
+            interval_seconds=max(300, settings.sbom_dependency_check_interval_minutes * 60),
+            payload={"asset_id": str(asset.id), "trigger": "SCHEDULED"},
+            enabled=settings.sbom_monitoring_enabled,
+        )
     # Disable schedules for assets that are no longer monitored.
     for schedule in db.execute(select(Schedule).where(Schedule.name.like("asset-scan:%"))).scalars():
         if schedule.name not in active_names:
+            schedule.enabled = False
+    for schedule in db.execute(
+        select(Schedule).where(Schedule.name.like(f"{DEPENDENCY_CHECK_SCHEDULE_PREFIX}%"))
+    ).scalars():
+        if schedule.name not in active_check_names:
             schedule.enabled = False
     db.commit()
     return len(active_names)
@@ -124,6 +147,18 @@ def ensure_default_schedules(db: Session) -> None:
             kind=JobKind.SYNC_EPSS,
             interval_seconds=max(1800, settings.epss_sync_interval_minutes * 60),
         )
+    # Continuous vulnerability monitoring: one global job re-evaluates every
+    # stored snapshot. It never enqueues a scan and never touches a repository.
+    from app.modules.sbom.lifecycle import REASSESSMENT_SCHEDULE_NAME
+
+    _upsert_schedule(
+        db,
+        name=REASSESSMENT_SCHEDULE_NAME,
+        kind=JobKind.SBOM_VULNERABILITY_REASSESSMENT,
+        interval_seconds=max(3600, settings.sbom_reassessment_interval_minutes * 60),
+        payload={"trigger": "SCHEDULED"},
+        enabled=settings.sbom_monitoring_enabled,
+    )
     # Policies are data; seeding them here keeps a fresh install usable without a
     # manual step and without writing during a read path.
     from app.modules.security_policies.service import ensure_defaults
@@ -171,9 +206,20 @@ def claim_due_schedules(db: Session, limit: int = 20) -> list[Schedule]:
                 schedule.last_error = None
                 payload = {**payload, "scan_id": str(scan.id)}
             else:
-                job = queue.enqueue(db, schedule.kind, payload, schedule_id=schedule.id)
-                schedule.last_job_id = job.id
-                schedule.last_status = "QUEUED"
+                # Idempotent enqueue: a periodic job that is already pending for
+                # the same target must not be queued twice.
+                match = (
+                    {"asset_id": str(payload["asset_id"])} if payload.get("asset_id") else {}
+                )
+                job, created = queue.enqueue_once(
+                    db,
+                    schedule.kind,
+                    payload,
+                    match=match,
+                    schedule_id=schedule.id,
+                )
+                schedule.last_job_id = job.id if job else None
+                schedule.last_status = "QUEUED" if created else "DEDUPLICATED"
                 schedule.last_error = None
             schedule.last_run_at = now
             schedule.next_run_at = now + timedelta(seconds=schedule.interval_seconds)

@@ -175,6 +175,31 @@ class Settings(BaseSettings):
     job_stale_after_seconds: int = 3600
     job_max_attempts: int = 3
 
+    # ------------------------------------------------------- SBOM lifecycle
+    #: Lightweight dependency change checks and continuous reassessment of
+    #: stored inventory. Full scans are never enqueued by these paths.
+    sbom_monitoring_enabled: bool = True
+    #: How often a repository head commit is inspected for dependency changes.
+    sbom_dependency_check_interval_minutes: int = 60
+    #: How often stored SBOM inventory is re-evaluated against intel.
+    sbom_reassessment_interval_minutes: int = 1440
+    #: Safety ceilings so one repository cannot monopolise a worker.
+    sbom_max_manifest_files: int = 200
+    sbom_max_manifest_bytes: int = 4 * 1024 * 1024
+    sbom_max_reassessment_components: int = 5000
+    #: Reassess stored inventory when a vulnerability feed sync brings changes.
+    sbom_reassess_after_intel_sync: bool = True
+    #: Include component paths in change-check metrics (bounded).
+    sbom_max_changed_paths: int = 200
+
+    # --------------------------------------------------------- git providers
+    github_api_url: str = "https://api.github.com"
+    gitlab_api_url: str = "https://gitlab.com/api/v4"
+    git_provider_timeout_seconds: float = 20.0
+    #: Shared secret used to verify inbound webhook deliveries. When unset the
+    #: webhook endpoints are disabled and answer 503 rather than trusting input.
+    webhook_secret: str | None = None
+
     @field_validator("api_keys", "allowed_git_hosts", "cors_origins", "scanners_enabled", mode="before")
     @classmethod
     def _parse_lists(cls, value: Any, info: ValidationInfo) -> Any:

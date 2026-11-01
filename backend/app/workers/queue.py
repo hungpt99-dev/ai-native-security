@@ -55,6 +55,58 @@ def enqueue(
     return job
 
 
+def find_active(db: Session, kind: JobKind | str, match: dict[str, Any] | None = None) -> Job | None:
+    """Return a queued/running job of ``kind`` whose payload matches ``match``.
+
+    Used to make job creation idempotent: an hourly check must not pile up a
+    second generation job for the same commit while the first one is still
+    running.
+    """
+    stmt = select(Job).where(
+        Job.kind == str(kind),
+        Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+    )
+    for key, value in (match or {}).items():
+        stmt = stmt.where(Job.payload[key].astext == str(value))
+    stmt = stmt.order_by(Job.created_at.asc()).limit(1)
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def enqueue_once(
+    db: Session,
+    kind: JobKind | str,
+    payload: dict[str, Any],
+    *,
+    match: dict[str, Any] | None = None,
+    priority: int = 100,
+    run_after: datetime | None = None,
+    max_attempts: int | None = None,
+    schedule_id: uuid.UUID | None = None,
+) -> tuple[Job | None, bool]:
+    """Enqueue unless an equivalent active job already exists.
+
+    Returns ``(job, created)``; ``created`` is False when the existing job was
+    reused, which callers report as "deduplicated" rather than as a failure.
+    """
+    existing = find_active(db, kind, match if match is not None else payload)
+    if existing is not None:
+        logger.info(
+            "job enqueue deduplicated",
+            extra={"extra_fields": {"job_id": str(existing.id), "kind": str(kind)}},
+        )
+        return existing, False
+    job = enqueue(
+        db,
+        kind,
+        payload,
+        priority=priority,
+        run_after=run_after,
+        max_attempts=max_attempts,
+        schedule_id=schedule_id,
+    )
+    return job, True
+
+
 def claim_next(db: Session, worker_id: str) -> Job | None:
     stmt = (
         select(Job)

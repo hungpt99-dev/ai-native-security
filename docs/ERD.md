@@ -10,11 +10,17 @@ erDiagram
     ASSETS ||--o{ SCANS : "has"
     ASSETS ||--o{ FINDINGS : "owns"
     ASSETS ||--o{ SBOMS : "has"
+    ASSETS ||--o{ SBOM_MONITORING_RUNS : "monitors"
+    ASSETS ||--o{ WEBHOOK_DELIVERIES : "receives"
     SCANS ||--o{ SCANNER_EXECUTIONS : "records"
     SCANS ||--o{ SBOMS : "produces"
     SCANS ||--o{ FINDINGS : "first/last detected in"
     FINDINGS ||--o{ FINDING_HISTORY : "audit trail"
     SBOMS ||--o{ SBOM_PACKAGES : "contains"
+    SBOMS ||--o| SBOMS : "replaces (previous_snapshot_id)"
+    SBOMS ||--o{ SBOM_MONITORING_RUNS : "generated/evaluated by"
+    JOBS ||--o{ SBOM_MONITORING_RUNS : "executes"
+    JOBS ||--o{ WEBHOOK_DELIVERIES : "enqueued from"
     VULNERABILITIES ||--o{ VULNERABILITY_REFERENCES : "cites"
     VULNERABILITIES ||--o{ VULNERABILITY_AFFECTED_PACKAGES : "affects"
     SCHEDULES ||--o{ JOBS : "emits"
@@ -51,7 +57,12 @@ with token-shaped strings redacted.
 The consolidated model. Key columns: `scanner`, `rule_id`, `category`,
 `severity`, `file_path`/`line_number`, `package_name`/`package_version`/`purl`,
 `cve_id`, `cvss_score`, `status`, `fingerprint`, `metadata` (JSONB),
-`first_detected_at`, `last_detected_at`, `resolved_at`.
+`first_detected_at`, `last_detected_at`, `resolved_at`, `discovery_source`.
+
+`discovery_source` ∈ {`FULL_SCAN`, `SBOM_REASSESSMENT`} records how the finding
+was *first* discovered; `metadata.evidence_sources` accumulates every path that
+later confirmed it. Identity is unchanged, so the same vulnerability found by a
+scan and by reassessment is one row, not two.
 
 Constraints/indexes:
 * `UNIQUE (asset_id, fingerprint)` — deduplication.
@@ -72,10 +83,35 @@ Metadata only: format, spec version, tool + version, `storage_key`, `sha256`,
 `size_bytes`, `package_count`, `asset_id`, `scan_id`. The document lives in
 object storage behind `StorageBackend`; the database never stores the JSON.
 
+Provenance columns, deliberately kept distinct:
+
+| Column | Meaning |
+| --- | --- |
+| `sha256` | checksum of the stored document (integrity) |
+| `dependency_fingerprint` | hash of the resolved inventory (ecosystem/name/version or purl) |
+| `manifest_fingerprint` | hash of dependency manifests, lockfiles and build inputs in the workspace |
+| `artifact_digest` | digest of the build artifact, when an SBOM came from one (`NULL` for directory scans) |
+| `commit_sha` / `branch` | Git state the workspace was checked out at |
+| `creation_reason` | `FULL_SCAN`, `INITIAL`, `DEPENDENCY_CHANGE`, `WEBHOOK`, `MANUAL`, `BASELINE` (a pre-tracking snapshot re-established from head) |
+| `generation_status` | `READY`; a failed generation creates no row (see `sbom_monitoring_runs`) |
+| `previous_snapshot_id` | lineage, `ON DELETE SET NULL` |
+| `generated_at` | when the tool produced the document |
+| `direct_package_count` / `transitive_package_count` | `NULL` when the generator emitted no graph |
+
+Constraints/indexes: `(asset_id, created_at)`, `(asset_id, commit_sha)`,
+`(asset_id, dependency_fingerprint)`, and a partial unique index on
+`(asset_id, dependency_fingerprint, commit_sha)` where both are non-null and
+`creation_reason <> 'FULL_SCAN'` — a lifecycle job cannot store the same
+composition for the same commit twice, while full scans keep one artifact each.
+
+Documents are never overwritten: a new snapshot is a new row and a new storage
+key.
+
 ### `sbom_packages`
 Extracted inventory: `name`, `version`, `ecosystem`, `purl`, `license`,
-`source_type`, `cpe`. Indexed on `(name, version)` and `(ecosystem, name)` for
-correlation and package search. Duplicate components are collapsed per SBOM.
+`source_type`, `cpe`, `is_direct`. Indexed on `(name, version)`,
+`(ecosystem, name)` and `(sbom_id, name, version)` for correlation, package
+search and reassessment joins. Duplicate components are collapsed per SBOM.
 
 ### `vulnerabilities`
 Normalized intelligence keyed by `UNIQUE (source, source_id)`:
@@ -99,15 +135,43 @@ created/updated counts, cursor (window start), error. `SUCCESS`/`PARTIAL` rows
 define the next incremental window.
 
 ### `schedules`
-`name` unique, `kind` ∈ {`SCAN`, `SYNC_OSV`, `SYNC_NVD`, `SYNC_KEV`}, JSONB
-`payload`, `interval_seconds`, `enabled`, `last_run_at`, `next_run_at`,
-`last_status`, `last_error`, `last_job_id`. Indexed on `(enabled, next_run_at)`.
+`name` unique, `kind` ∈ {`SCAN`, `SYNC_OSV`, `SYNC_NVD`, `SYNC_KEV`, `SYNC_EPSS`,
+`AI_*`, `SBOM_CHANGE_CHECK`, `SBOM_GENERATE`,
+`SBOM_VULNERABILITY_REASSESSMENT`}, JSONB `payload`, `interval_seconds`,
+`enabled`, `last_run_at`, `next_run_at`, `last_status` (`QUEUED` or
+`DEDUPLICATED`), `last_error`, `last_job_id`. Indexed on
+`(enabled, next_run_at)`.
 
 ### `jobs`
 Queue + history: `kind`, JSONB `payload`, `status` (`QUEUED`, `RUNNING`,
 `SUCCEEDED`, `FAILED`, `CANCELED`), `priority`, `attempts`/`max_attempts`,
 `run_after`, `locked_at`, `locked_by`, `heartbeat_at`, `last_error`,
 `schedule_id`. Indexed on `(status, run_after)` for claims.
+
+### `sbom_monitoring_runs`
+One row per executed SBOM operation — the timeline behind the UI and the
+observability counters.
+
+| Column group | Columns |
+| --- | --- |
+| identity | `asset_id`, `sbom_id` (generated or evaluated snapshot), `job_id`, `kind` ∈ {`DEPENDENCY_CHECK`, `SBOM_GENERATION`, `VULNERABILITY_REASSESSMENT`}, `trigger` |
+| lifecycle | `status` ∈ {`RUNNING`, `SUCCEEDED`, `PARTIAL`, `FAILED`, `SKIPPED`}, `outcome` (`DependencyChangeOutcome` for checks), `started_at`, `finished_at`, `duration_ms`, `skipped_reason`, `error_message` |
+| git state | `head_commit_sha`, `previous_commit_sha`, `branch` |
+| composition | `dependency_fingerprint`, `previous_dependency_fingerprint` |
+| counts | `components_evaluated`, `findings_created`, `findings_updated`, `findings_resolved`, `new_kev_findings`, `failure_count` |
+| detail | `metrics` (JSONB: changed paths, ecosystems, diff counts, resolution reasons, `repository_accessed`, `scanners_executed`) |
+
+Indexed on `(asset_id, kind, started_at)`, `(kind, started_at)`, `status`,
+`sbom_id`. Rows are inserted and committed as `RUNNING` before work starts, so a
+crash is visible; `PARTIAL` always means "some evidence was unavailable".
+
+### `webhook_deliveries`
+Idempotency log for inbound provider webhooks: `provider`, `delivery_id`
+(`UNIQUE (provider, delivery_id)`), `event`, `repo_url`, `asset_id`, `job_id`,
+`action` ∈ {`ENQUEUED`, `IGNORED`, `DUPLICATE`, `REJECTED`,
+`UNKNOWN_REPOSITORY`}, `reason`, `head_commit_sha`, `branch`, `changed_paths`
+(JSONB), `payload_digest`, `received_at`, `headers` (provider headers only —
+signature and token values are never stored).
 
 ## AI layer tables
 

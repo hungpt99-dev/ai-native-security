@@ -10,11 +10,15 @@ import type {
   IntelligenceStats,
   Job,
   InvestigationReport,
+  MonitoringRun,
+  MonitoringSummary,
   Page,
   RemediationRecommendation,
   RemediationVerification,
   RiskAssessment,
   Sbom,
+  SbomDiff,
+  SbomStatus,
   SecurityContextPayload,
   AssistantReply,
   SbomPackage,
@@ -203,6 +207,80 @@ export function useSbomPackages(id: string | undefined, params: QueryParams) {
     enabled: Boolean(id),
     placeholderData: (previous) => previous,
   });
+}
+
+// -------------------------------------------------- continuous SBOM lifecycle
+export function useSbomStatus(assetId: string | undefined) {
+  return useQuery({
+    queryKey: ["sbom-status", assetId],
+    queryFn: () => api.get<SbomStatus>(`/assets/${assetId}/sbom/status`),
+    enabled: Boolean(assetId),
+    refetchInterval: 10000,
+  });
+}
+
+export function useAssetMonitoringRuns(assetId: string | undefined, params: QueryParams) {
+  return useQuery({
+    queryKey: ["sbom-monitoring-runs", assetId, params],
+    queryFn: () => api.get<Page<MonitoringRun>>(`/assets/${assetId}/sbom/monitoring-runs`, params),
+    enabled: Boolean(assetId),
+    refetchInterval: 15000,
+  });
+}
+
+export function useSbomDiff(sbomId: string | undefined, params: QueryParams) {
+  return useQuery({
+    queryKey: ["sbom-diff", sbomId, params],
+    queryFn: () => api.get<SbomDiff>(`/sboms/${sbomId}/diff`, params),
+    enabled: Boolean(sbomId),
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useMonitoringSummary(days = 30) {
+  return useQuery({
+    queryKey: ["sbom-monitoring-summary", days],
+    queryFn: () => api.get<MonitoringSummary>("/sbom/monitoring/summary", { days }),
+    refetchInterval: 30000,
+  });
+}
+
+interface SbomActionResponse {
+  asset_id: string;
+  job_id: string | null;
+  deduplicated: boolean;
+  kind: string;
+  sbom_id: string | null;
+}
+
+function useSbomAction(assetId: string, action: "check" | "generate" | "reassess") {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (sbomId?: string) =>
+      api.post<SbomActionResponse>(
+        `/assets/${assetId}/sbom/${action}${sbomId ? `?sbom_id=${sbomId}` : ""}`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sbom-status", assetId] });
+      void queryClient.invalidateQueries({ queryKey: ["sbom-monitoring-runs", assetId] });
+      void queryClient.invalidateQueries({ queryKey: ["asset-sboms", assetId] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["findings"] });
+      void queryClient.invalidateQueries({ queryKey: ["asset"] });
+    },
+  });
+}
+
+export function useCheckDependencies(assetId: string) {
+  return useSbomAction(assetId, "check");
+}
+
+export function useGenerateSbom(assetId: string) {
+  return useSbomAction(assetId, "generate");
+}
+
+export function useReassessVulnerabilities(assetId: string) {
+  return useSbomAction(assetId, "reassess");
 }
 
 export function useVulnerabilities(params: QueryParams) {

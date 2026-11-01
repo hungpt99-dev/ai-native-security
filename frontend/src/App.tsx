@@ -8,6 +8,7 @@ import { ScanDetailPage } from "@/pages/ScanDetailPage";
 import { FindingsPage } from "@/pages/FindingsPage";
 import { SbomsPage } from "@/pages/SbomsPage";
 import { SbomDetailPage } from "@/pages/SbomDetailPage";
+import { SbomComparePage } from "@/pages/SbomComparePage";
 import { IntelligencePage } from "@/pages/IntelligencePage";
 import { OperationsPage } from "@/pages/OperationsPage";
 import { RemediationPage } from "@/pages/RemediationPage";
@@ -25,6 +26,7 @@ export function App() {
         <Route path="findings" element={<FindingsPage />} />
         <Route path="sboms" element={<SbomsPage />} />
         <Route path="sboms/:id" element={<SbomDetailPage />} />
+        <Route path="sboms/:id/compare" element={<SbomComparePage />} />
         <Route path="intelligence" element={<IntelligencePage />} />
         <Route path="remediation" element={<RemediationPage />} />
         <Route path="assistant" element={<AssistantPage />} />

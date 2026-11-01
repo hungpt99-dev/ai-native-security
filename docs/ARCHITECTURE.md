@@ -38,8 +38,9 @@ app/modules/
 ├── assets/               # repository inventory + encrypted credentials
 ├── scans/                # scan lifecycle rows and state machine
 ├── scanners/             # adapters + hardened subprocess layer (no DB access)
-├── sbom/                 # SBOM persistence, package inventory, dependency edges
-├── vulnerabilities/      # OSV/NVD/KEV/EPSS clients, sync, CVSS, correlation
+├── sbom/                 # SBOM persistence, inventory, dependency detection, diff, lifecycle
+├── git_provider/         # GitHub/GitLab metadata client, webhook verification + delivery log
+├── vulnerabilities/      # OSV/NVD/KEV/EPSS clients, sync, CVSS, correlation, reassessment
 ├── findings/             # normalization ingestion, dedup, history, queries
 ├── security_intelligence/# context builder, dependency graph, version maths, snippets
 ├── ai/                   # providers, prompts, agents, workflows, ledger, assistant tools
@@ -103,6 +104,184 @@ A single status flag is not enough for "did this work?": the pipeline treats any
 scanner `FAILED`/`TIMED_OUT` as scan `FAILED` (findings are still stored), which
 suppresses auto-resolution because the evidence is incomplete.
 
+## Three distinct operations
+
+The platform separates three operations that are routinely conflated. They have
+different costs, different failure semantics and different evidence.
+
+| | Full security scan | SBOM update | Vulnerability reassessment |
+| --- | --- | --- | --- |
+| Job kind | `SCAN` | `SBOM_CHANGE_CHECK` → `SBOM_GENERATE` | `SBOM_VULNERABILITY_REASSESSMENT` |
+| Clones the repository | yes | yes (generation only; the check never clones) | **no** |
+| Runs Syft | yes | yes | **no** |
+| Runs Trivy/Semgrep/Gitleaks | yes | **no** | **no** |
+| Writes a finding | yes | no | yes (from stored intel) |
+| Writes an SBOM snapshot | yes (`FULL_SCAN`) | yes (immutable, lineage-linked) | no |
+| Trigger | schedule/manual | webhook, schedule, dependency change, manual | daily schedule, intel sync, manual |
+
+### B. SBOM update
+
+`modules/sbom/lifecycle.py` decides whether the stored snapshot still describes
+the repository. It never runs the security scanner pipeline.
+
+1. Resolve the branch head — provider REST API, or `git ls-remote` (refs only).
+   A failed lookup is `UNKNOWN`, never "up to date".
+2. `head == snapshot.commit_sha` → `UNCHANGED`; nothing else happens.
+   A snapshot with no recorded commit is `UNKNOWN` (never "current") and a
+   `BASELINE` generation is queued to re-establish a comparable state.
+3. Otherwise compare commits and classify the changed paths
+   (`modules/sbom/dependencies.py`). A commit change alone is **not** a
+   dependency change: only manifest / lockfile / build-input paths count.
+4. Dependency paths → enqueue `SBOM_GENERATE` (deduplicated by asset + head SHA).
+   Business-logic-only paths → record `NO_DEPENDENCY_CHANGE` and stop.
+5. Generation checks out, runs Syft, hashes the dependency inputs and the
+   resolved inventory, and stores a new snapshot with `previous_snapshot_id`.
+6. Old vs new inventories are diffed (`modules/sbom/diff.py`) and a reassessment
+   of the new snapshot is queued.
+
+Layers of evidence, in order of preference:
+
+1. manifest/lockfile/build-config fingerprint (`manifest_fingerprint`);
+2. changed-path classification from the provider;
+3. commit SHA;
+4. resolved inventory fingerprint (`dependency_fingerprint`);
+5. artifact digest (`artifact_digest`) — only when an SBOM was generated from a
+   build artifact; directory scans leave it `NULL` instead of reusing another
+   hash.
+
+The four identifiers are deliberately distinct: document checksum (`sha256`),
+resolved composition (`dependency_fingerprint`), declared inputs
+(`manifest_fingerprint`) and Git state (`commit_sha`). None is derived from
+another.
+
+### C. Continuous vulnerability reassessment
+
+`modules/vulnerabilities/reassessment.py` correlates **stored** inventory with
+**stored** intelligence:
+
+1. load `sbom_packages` for a snapshot (bounded by
+   `ANS_SBOM_MAX_REASSESSMENT_COMPONENTS`);
+2. load matching `vulnerability_affected_packages` + `vulnerabilities` in chunked
+   queries, plus EPSS and references in batch — no external API call;
+3. evaluate each version with `security_intelligence/versions.py`
+   (`is_affected`), the same comparator risk analysis and remediation use;
+4. upsert findings through `findings.service.record_findings` with
+   `scan_id = NULL` and `discovery_source = SBOM_REASSESSMENT`;
+5. enrich KEV/EPSS through `vulnerabilities.correlation.enrich_findings`
+   (shared with the scan path);
+6. resolve findings only on positive evidence.
+
+Identity is unchanged: `(asset_id, fingerprint)` with
+`fingerprint = sha256(asset|scanner|rule|package|version)`. A vulnerability found
+by both a scan and a reassessment is one finding whose
+`metadata.evidence_sources` lists both paths.
+
+Resolution rules:
+
+| Evidence | Outcome |
+| --- | --- |
+| exact installed version still inventoried, ranges exclude it | resolve (`version_no_longer_affected`) |
+| exact version gone, package present at another version, inventory provenance | resolve (`package_version_changed`) |
+| package gone from the inventory, inventory provenance | resolve (`package_removed_from_inventory`) |
+| intelligence record missing for an active finding | **no** resolution, `needs_review` |
+| range data unusable (GIT ranges, unparseable versions) | **no** resolution, run `PARTIAL` |
+| inventory truncated by the component ceiling | **no** resolution, run `PARTIAL` |
+
+A failed or partial assessment never resolves anything, and a missing intel
+record is explicitly not treated as a fix.
+
+Findings whose only provenance is an inventory snapshot are closed by
+reassessment, not by the scan resolver: `resolve_missing_findings` keys on
+`last_scan_id`, and a finding no scan ever confirmed keeps that column `NULL` on
+purpose. Once a scan re-detects the same finding (same fingerprint) it gains
+`last_scan_id` and returns to the normal scan lifecycle.
+
+Risk assessments are **not** recomputed for findings whose evidence did not
+change: `risk_assessments` is append-only, and rewriting it on every daily pass
+would create history without new evidence. What reassessment does update is the
+deterministic input (severity, CVSS, KEV, EPSS). Findings created by a
+reassessment go through the existing AI policy gate (`workers/automation.py`),
+which is the only place that decides whether a model call is justified.
+
+## Dependency change detection
+
+`modules/sbom/dependencies.py` owns the canonical registry of dependency inputs
+(`MANIFEST`, `LOCKFILE`, `BUILD_CONFIG`) for Maven/Gradle, npm/yarn/pnpm,
+Python (requirements/pyproject/poetry/uv/Pipenv/conda), Go, Rust, .NET, Ruby,
+PHP, Swift, Dart, Elixir and Docker/compose. It is basename-based so monorepos
+and per-service manifests are matched at any depth. `security_intelligence`
+reuses `is_manifest_path` from it instead of keeping a second list.
+
+Covered cases: unchanged commit, business-logic-only commit, lockfile change
+without manifest change, added/removed/renamed manifests, multiple manifests,
+monorepo layouts, build-config changes, branch change (forces a new snapshot,
+never reuses another branch's snapshot), provider failure (`UNKNOWN`),
+truncated compare payload (treated as *possibly changed* — the conservative
+direction).
+
+## Scheduling
+
+`schedules` rows describe periodic work (`asset-scan:<uuid>`,
+`asset-sbom-check:<uuid>`, `sync:osv`, `sync:nvd`, `sync:kev`, `sync:epss`,
+`sbom:reassess`). The scheduler:
+
+* acquires a PostgreSQL advisory lock (single scheduler instance),
+* refreshes per-asset scan **and** SBOM check schedules every 5 minutes from
+  `assets.monitoring_enabled`; the two intervals are independent, so composition
+  monitoring does not inherit the scan cadence,
+* claims due rows `FOR UPDATE SKIP LOCKED` and enqueues jobs in the same
+  transaction that advances `next_run_at`,
+* enqueues idempotently (`queue.enqueue_once`): an equivalent queued/running job
+  is reused and the schedule records `DEDUPLICATED`,
+* records `last_status`/`last_error` for visibility, and skips scans that are
+  already active.
+
+Daily monitoring never enqueues a `SCAN`: `sbom:reassess` is a
+`SBOM_VULNERABILITY_REASSESSMENT` job that only reads the database.
+
+## Concurrency, idempotency, failure handling
+
+* Per-operation PostgreSQL advisory locks (`check`, `generate`, `reassess`) are
+  keyed by asset. A second worker skips instead of racing; a crashed worker
+  releases its lock with the connection, so no stale row can block an asset.
+* Generation is deduplicated twice: the application skips when inventory and
+  commit match the latest snapshot, and a partial unique index
+  `(asset_id, dependency_fingerprint, commit_sha) WHERE ... creation_reason <> 'FULL_SCAN'`
+  rejects a concurrent duplicate. Full scans are exempt because each scan owns
+  its artifact.
+* Jobs are deduplicated by payload match (`asset_id`, and `head_sha`/`sbom_id`
+  where relevant). Retries use exponential backoff; stale heartbeats requeue.
+* Every attempt is a committed `sbom_monitoring_runs` row (`RUNNING` first), so a
+  crash leaves a visible record instead of a rolled-back transaction. Failed
+  generation creates **no** snapshot row: a snapshot that exists always has a
+  readable document behind `storage_key`.
+* Reassessment is idempotent: same inventory + same intelligence produces no new
+  findings and no new history rows.
+
+## Observability
+
+Structured logs (`sbom snapshot generated`, `sbom monitoring run finished`,
+`webhook dependency check enqueued`, `job enqueue deduplicated`) carry
+asset/run/job identifiers and counts. Every run row records duration, components
+evaluated, findings created/updated/resolved, new KEV findings and failure
+counts. `GET /sbom/monitoring/summary` aggregates a window and reports estimated
+scans/checkouts/scanner executions avoided — an estimate, with its formula
+exposed in `estimate_basis`, derived from checks that proved composition
+unchanged.
+
+## Webhooks
+
+`git_provider` verifies GitHub (`X-Hub-Signature-256`, HMAC-SHA256 over the raw
+body) and GitLab (`X-Gitlab-Token`, constant-time compare) deliveries against
+`ANS_WEBHOOK_SECRET`. Routes are mounted outside the API-key router because a
+provider cannot send `X-API-Key`. A delivery is stored in
+`webhook_deliveries` with `UNIQUE (provider, delivery_id)`; a replay is a no-op.
+Only push events to the asset's default branch produce work, and the request
+only enqueues — nothing is cloned or scanned inside the HTTP call. When the
+webhook secret is unset the endpoints answer `503` instead of trusting input.
+Polling (`asset-sbom-check:<uuid>`) remains available as the fallback when
+webhooks cannot be configured.
+
 ## Finding model
 
 * Identity = `(asset_id, fingerprint)`, enforced by a unique constraint.
@@ -128,27 +307,14 @@ correlation column. CVSS is computed from the vector when a source only
 publishes one (OSV), and stays `NULL` when unavailable; severity is never
 invented.
 
-## Scheduling
-
-`schedules` rows describe periodic work (`asset-scan:<uuid>`, `sync:osv`,
-`sync:nvd`, `sync:kev`). The scheduler:
-
-* acquires a PostgreSQL advisory lock (single scheduler instance),
-* refreshes asset scan schedules every 5 minutes from `assets.monitoring_enabled`
-  and `scan_interval_minutes`,
-* claims due rows `FOR UPDATE SKIP LOCKED` and enqueues jobs in the same
-  transaction that advances `next_run_at`, which makes duplicate enqueues
-  impossible,
-* records `last_status`/`last_error` for visibility, and skips scans that are
-  already active.
-
 ## Frontend
 
 React 18 + TypeScript + Vite + Tailwind v4 + TanStack Query, shadcn-style
 primitives built on Radix (`Dialog`, `Select`). Server state is entirely
 TanStack Query; there is no mock data path in production flows. Pages:
-dashboard, repositories, repository detail, scans, scan detail, findings,
-SBOM list/detail, intelligence, operations.
+dashboard, repositories, repository detail (with the SBOM & continuous
+monitoring panel), scans, scan detail, findings, SBOM list/detail/compare,
+intelligence, operations.
 
 ## Decisions worth re-reading
 

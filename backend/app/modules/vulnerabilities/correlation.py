@@ -8,6 +8,7 @@ vulnerabilities are materially more urgent. Nothing here assumes a CVE exists.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import select
@@ -20,7 +21,7 @@ from app.modules.findings.service import anchor_metadata
 from app.modules.scanners.base import NormalizedFinding
 from app.modules.scanners.syft import SbomPackageInfo
 from app.modules.vulnerabilities import repository as vuln_repo
-from app.modules.vulnerabilities.models import Vulnerability
+from app.modules.vulnerabilities.models import Vulnerability, VulnerabilityEpss
 from app.modules.vulnerabilities.osv import (
     OsvClient,
     is_supported_ecosystem,
@@ -33,13 +34,18 @@ MAX_CORRELATION_PACKAGES = 750
 MAX_DETAIL_FETCHES = 150
 
 
-def _promote_severity(current: str, is_kev: bool) -> str:
+def promote_severity(current: str, is_kev: bool) -> str:
+    """KEV membership raises severity to at least HIGH; it never lowers it."""
     if not is_kev:
         return current
     rank = SEVERITY_ORDER.get(current, 5)
     if rank > SEVERITY_ORDER[Severity.HIGH.value]:
         return Severity.HIGH.value
     return current
+
+
+#: Backwards-compatible private alias (existing call sites).
+_promote_severity = promote_severity
 
 
 def correlate_packages(
@@ -151,8 +157,19 @@ def enrich_scan_findings(db: Session, scan_id: uuid.UUID) -> int:
     rows = db.execute(
         select(Finding).where(Finding.last_scan_id == scan_id, Finding.cve_id.is_not(None))
     ).scalars().all()
+    return enrich_findings(db, list(rows))["enriched"]
+
+
+def enrich_findings(db: Session, rows: Sequence[Finding]) -> dict[str, int]:
+    """Enrich findings with stored CVSS, KEV and EPSS data.
+
+    Shared by the scan pipeline and continuous reassessment so both paths
+    produce identical enrichment. Counts are returned for observability:
+    ``kev_new`` is the number of findings that became KEV-designated since the
+    previous enrichment, ``epss_updated`` the number whose EPSS score moved.
+    """
     if not rows:
-        return 0
+        return {"enriched": 0, "kev_new": 0, "epss_updated": 0}
 
     cve_ids = {row.cve_id for row in rows if row.cve_id}
     intel_rows = db.execute(
@@ -163,17 +180,26 @@ def enrich_scan_findings(db: Session, scan_id: uuid.UUID) -> int:
         if entry.cve_id:
             by_cve.setdefault(entry.cve_id, []).append(entry)
 
-    enriched = 0
+    epss_rows = db.execute(
+        select(VulnerabilityEpss).where(VulnerabilityEpss.cve_id.in_(cve_ids))
+    ).scalars().all()
+    epss_by_cve = {row.cve_id: row for row in epss_rows}
+
+    enriched = kev_new = epss_updated = 0
     for row in rows:
         entries = by_cve.get(row.cve_id or "", [])
         if not entries:
             continue
         best = max(entries, key=lambda e: float(e.cvss_score or 0))
         is_kev = any(entry.is_kev for entry in entries)
+        epss = epss_by_cve.get(row.cve_id or "")
+        previous = (row.metadata_json or {}).get("intel") or {}
+        previous_kev = bool(previous.get("is_kev"))
+        previous_epss = previous.get("epss_score")
         if best.cvss_score is not None and row.cvss_score is None:
             row.cvss_score = best.cvss_score
         if is_kev:
-            row.severity = _promote_severity(row.severity, True)
+            row.severity = promote_severity(row.severity, True)
         anchor_metadata(
             row,
             "intel",
@@ -184,8 +210,22 @@ def enrich_scan_findings(db: Session, scan_id: uuid.UUID) -> int:
                 "cvss_vector": best.cvss_vector,
                 "kev_due_date": best.kev_due_date.isoformat() if best.kev_due_date else None,
                 "kev_required_action": best.kev_required_action,
+                "epss_score": float(epss.score) if epss is not None else previous_epss,
+                "epss_percentile": (
+                    float(epss.percentile) if epss is not None else previous.get("epss_percentile")
+                ),
+                "epss_scored_at": (
+                    epss.scored_date.isoformat()
+                    if epss is not None and epss.scored_date
+                    else previous.get("epss_scored_at")
+                ),
             },
         )
         enriched += 1
+        if is_kev and not previous_kev:
+            kev_new += 1
+        current_epss = float(epss.score) if epss is not None else None
+        if current_epss is not None and current_epss != previous_epss:
+            epss_updated += 1
     db.flush()
-    return enriched
+    return {"enriched": enriched, "kev_new": kev_new, "epss_updated": epss_updated}

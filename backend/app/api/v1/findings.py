@@ -35,6 +35,7 @@ def list_findings(
     status: Annotated[list[str] | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=200)] = None,
     cve_id: Annotated[str | None, Query(max_length=32)] = None,
+    discovery_source: Annotated[list[str] | None, Query()] = None,
     sort_by: Annotated[str, Query()] = "severity",
     sort_order: Annotated[str, Query(pattern="^(?i)(asc|desc)$")] = "asc",
 ) -> Page[FindingRead]:
@@ -48,6 +49,7 @@ def list_findings(
         statuses=status,
         search=search,
         cve_id=cve_id,
+        discovery_sources=discovery_source,
         sort_by=sort_by,
         sort_order=sort_order,
     )

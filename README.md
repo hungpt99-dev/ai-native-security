@@ -111,8 +111,14 @@ every deterministic capability still works.
 ```mermaid
 flowchart LR
     A["Repository<br/>registered"] --> B["Security scan<br/>Trivy · Semgrep · Gitleaks · Syft"]
-    B --> C["Architecture discovery<br/>languages · frameworks · manifests"]
-    B --> D["Vulnerability correlation<br/>OSV · NVD · KEV · EPSS"]
+    B --> S["Immutable SBOM snapshot<br/>commit · manifest + composition fingerprints"]
+    S --> M["Continuous SBOM monitoring"]
+    I["New intelligence<br/>OSV · NVD · KEV · EPSS"] --> M
+    W["Webhook / schedule<br/>dependency change"] --> U["SBOM update<br/>Syft only"]
+    U --> S
+    M --> D["Vulnerability correlation<br/>stored inventory × stored intel"]
+    B --> D
+    S --> C["Architecture discovery<br/>languages · frameworks · manifests"]
     C --> E["Security context<br/>snapshot + evidence"]
     D --> E
     E --> F["AI investigation<br/>LangGraph"]
@@ -130,6 +136,36 @@ flowchart LR
 
 The dotted edge is the feedback loop: recorded decisions and outcomes are available to
 later investigations as prior knowledge.
+
+## Three operations, three costs
+
+A security platform that re-scans everything every day to discover a new CVE is
+paying for the wrong work. This one separates the three questions:
+
+| Question | Operation | Touches the repository | Cost |
+| --- | --- | --- | --- |
+| What is this software made of, and what is wrong in its source? | **Full security scan** | clone + Syft + Trivy + Semgrep + Gitleaks | high |
+| Did the software composition change? | **SBOM update** (dependency check → Syft only) | metadata check: no clone; generation: clone + Syft | low / medium |
+| Is the preserved inventory affected by what we just learned? | **Vulnerability reassessment** | nothing | database only |
+
+A dependency check is an hourly metadata call. A full scan stays on its own,
+much slower cadence. Daily monitoring enqueues **no** scans: it re-reads stored
+inventory against stored OSV/NVD/KEV/EPSS data, so a CVE published today is
+matched against a repository that has not changed in months.
+
+```bash
+# what changed since the snapshot, without cloning anything
+curl -X POST $API/assets/$ID/sbom/check
+
+# re-evaluate stored inventory against stored intelligence
+curl -X POST $API/assets/$ID/sbom/reassess
+
+# is the snapshot still current, and when does monitoring run next?
+curl $API/assets/$ID/sbom/status | jq '{freshness, monitoring_status, next_reassessment}'
+
+# how much full scanning was avoided, measured
+curl $API/sbom/monitoring/summary?days=30 | jq
+```
 
 ## Architecture
 
@@ -211,6 +247,12 @@ not exist yet.
 | **Business context** | Criticality, environment, internet exposure, business importance, data sensitivity, owner — stored and consumed by risk scoring | `IMPLEMENTED` (API; no editing form in the UI yet) |
 | **Security scanning** | Trivy, Semgrep, Gitleaks in an isolated worker: argv-only execution, rlimits, timeouts, per-scanner status and output excerpts | `IMPLEMENTED` |
 | **SBOM management** | Syft CycloneDX/SPDX generation, artifact storage, package inventory, download | `IMPLEMENTED` |
+| **SBOM snapshot lifecycle** | Immutable snapshots with commit, branch, manifest fingerprint, resolved-inventory fingerprint and lineage; provenance kept separately from the document checksum | `IMPLEMENTED` |
+| **Dependency change detection** | Webhook, schedule or manual check resolves the head commit from provider metadata (or `git ls-remote`) and classifies changed paths per ecosystem; a commit change alone never regenerates the SBOM | `IMPLEMENTED` |
+| **SBOM update without a scan** | `SBOM_GENERATE` checks out and runs Syft only — no Trivy, Semgrep or Gitleaks | `IMPLEMENTED` |
+| **SBOM diff** | Deterministic ADDED / REMOVED / VERSION_CHANGED / UNCHANGED with PURL-based identity, counts and a paginated detail API | `IMPLEMENTED` |
+| **Continuous vulnerability reassessment** | Daily re-evaluation of stored inventory against stored OSV/NVD/KEV/EPSS data — no clone, no Syft, no scanner; new CVEs are found for repositories that have not changed in months | `IMPLEMENTED` |
+| **Repository webhooks** | GitHub HMAC / GitLab token verification, delivery deduplication, push-to-branch filtering, enqueue-only (never scans in the request) | `IMPLEMENTED` |
 | **Dependency graph** | SBOM edge extraction, parent lookup, direct/transitive analysis, depth from a root dependency | `PARTIAL` — parser, storage and analysis exist, but the bundled Syft build emits no `dependencies` for directory scans, so most repositories report `dependency_graph_unavailable` |
 | **Vulnerability intelligence** | OSV (exact installed version), NVD incremental sync, CISA KEV, daily EPSS, source attribution, sync history | `IMPLEMENTED` |
 | **Finding management** | Normalization, semantic fingerprints, deduplication, history, status transitions, auto-resolution only after a clean scan | `IMPLEMENTED` |
@@ -363,6 +405,13 @@ full set. The ones that matter most:
 | `ANS_AI_ALLOW_SOURCE_SHARING` | Whether redacted snippets may leave the process | no |
 | `ANS_CAPTURE_CODE_SNIPPETS` | Bounded snippet capture during scans | no |
 | `ANS_STORAGE_ROOT`, `ANS_STORAGE_BACKEND` | SBOM artifact storage | no |
+| `ANS_SBOM_MONITORING_ENABLED` | Continuous SBOM monitoring (default `true`) | no |
+| `ANS_SBOM_DEPENDENCY_CHECK_INTERVAL_MINUTES` | Lightweight dependency check cadence (default `60`) | no |
+| `ANS_SBOM_REASSESSMENT_INTERVAL_MINUTES` | Stored-inventory re-evaluation cadence (default `1440`) | no |
+| `ANS_SBOM_MAX_REASSESSMENT_COMPONENTS` | Per-snapshot component ceiling (default `5000`) | no |
+| `ANS_SBOM_REASSESS_AFTER_INTEL_SYNC` | Reassess when a feed sync changes intelligence (default `true`) | no |
+| `ANS_WEBHOOK_SECRET` | Verifies GitHub/GitLab webhooks; unset disables the endpoints (`503`) | for webhooks |
+| `ANS_GITHUB_API_URL`, `ANS_GITLAB_API_URL` | Provider API base URLs for metadata-only change checks | no |
 
 ## Project structure
 
@@ -377,8 +426,9 @@ ai-native-security/
 │   │   │   ├── assets/             # repositories, credentials, security profiles
 │   │   │   ├── scans/              # scan lifecycle and state machine
 │   │   │   ├── scanners/           # Trivy, Semgrep, Gitleaks, Syft adapters
-│   │   │   ├── sbom/               # documents, packages, dependency edges
-│   │   │   ├── vulnerabilities/    # OSV, NVD, KEV, EPSS, correlation
+│   │   │   ├── sbom/               # documents, packages, dependency detection, diff, lifecycle
+│   │   │   ├── git_provider/       # GitHub/GitLab metadata, webhook verification, delivery log
+│   │   │   ├── vulnerabilities/    # OSV, NVD, KEV, EPSS, correlation, reassessment
 │   │   │   ├── findings/           # ingestion, dedup, history, queries
 │   │   │   ├── security_intelligence/  # context builder, version comparator, snippets
 │   │   │   ├── ai/                 # providers, prompts, agents, workflows, ledger
@@ -389,7 +439,7 @@ ai-native-security/
 │   │   │   └── knowledge_base/     # decisions, feedback, transcripts
 │   │   ├── scheduler/              # periodic enqueueing
 │   │   └── workers/                # queue, checkout, scan pipeline, worker loop
-│   ├── alembic/                    # migrations (head: 0003)
+│   ├── alembic/                    # migrations (head: 2cf7e16e149a)
 │   └── tests/                      # unit + integration (real PostgreSQL, offline)
 ├── frontend/                       # React + TypeScript + Vite + Tailwind
 ├── docker/                         # Dockerfiles, nginx
@@ -404,9 +454,9 @@ ai-native-security/
 
 ```bash
 cd backend
-pytest -q              # 167 tests; integration tests use a real security_test database
+pytest -q              # 268 tests; integration tests use a real security_test database
 ruff check app tests   # lint (line length 110)
-mypy app               # types (132 modules)
+mypy app               # types (142 modules)
 
 cd ../frontend
 npm run build          # tsc -b && vite build

@@ -34,6 +34,18 @@ class SbomRead(BaseModel):
     size_bytes: int
     package_count: int
     created_at: datetime
+    # ---------------------------------------------------------- provenance
+    commit_sha: str | None = None
+    branch: str | None = None
+    dependency_fingerprint: str | None = None
+    manifest_fingerprint: str | None = None
+    artifact_digest: str | None = None
+    creation_reason: str | None = None
+    generation_status: str | None = None
+    previous_snapshot_id: uuid.UUID | None = None
+    generated_at: datetime | None = None
+    direct_package_count: int | None = None
+    transitive_package_count: int | None = None
 
 
 class SbomPackageRead(BaseModel):

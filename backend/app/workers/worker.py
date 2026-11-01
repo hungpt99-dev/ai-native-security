@@ -22,7 +22,7 @@ from app.core.enums import JobKind
 from app.core.logging import configure_logging, get_logger, scan_id_var
 from app.database.session import SessionLocal, engine
 from app.modules.vulnerabilities.sync import sync_source
-from app.workers import queue
+from app.workers import automation, queue
 from app.workers.models import Job
 from app.workers.pipeline import execute_scan
 
@@ -63,13 +63,24 @@ def _run_job(db: Session, job: Job, current_worker: str) -> None:
             JobKind.SYNC_NVD.value: "NVD",
             JobKind.SYNC_KEV.value: "CISA_KEV",
         }[job.kind]
-        sync_source(db, source)
+        result = sync_source(db, source)
+        changed = int(result.get("created", 0)) + int(result.get("updated", 0))
+        if changed:
+            # New or corrected intelligence is exactly when stored inventory
+            # must be re-evaluated — no repository is touched for that.
+            from app.modules.vulnerabilities import reassessment
+
+            reassessment.enqueue_after_intel_sync(db, source=source, changed=changed)
         return
 
     if job.kind == JobKind.SYNC_EPSS.value:
+        from app.modules.vulnerabilities import reassessment
         from app.modules.vulnerabilities.sync import sync_epss
 
-        sync_epss(db)
+        result = sync_epss(db)
+        changed = int(result.get("processed", 0))
+        if changed:
+            reassessment.enqueue_after_intel_sync(db, source="EPSS", changed=changed)
         return
 
     if job.kind == JobKind.AI_RISK.value:
@@ -106,6 +117,70 @@ def _run_job(db: Session, job: Job, current_worker: str) -> None:
         if not raw:
             raise ValueError("AI_VERIFY job payload is missing verification_id")
         verification_service.explain(db, uuid.UUID(str(raw)), principal="worker")
+        return
+
+    # ------------------------------------------------ continuous SBOM lifecycle
+    if job.kind == JobKind.SBOM_CHANGE_CHECK.value:
+        from app.modules.sbom import lifecycle
+
+        asset_id = uuid.UUID(str(payload.get("asset_id") or "")) if payload.get("asset_id") else None
+        if asset_id is None:
+            raise ValueError("SBOM_CHANGE_CHECK job payload is missing asset_id")
+        scan_id_var.set(None)
+        lifecycle.check_dependencies(
+            db,
+            asset_id=asset_id,
+            trigger=str(payload.get("trigger") or "SCHEDULED"),
+            branch=payload.get("branch"),
+            head_sha=payload.get("head_sha"),
+            changed_paths=payload.get("changed_paths"),
+            job_id=job.id,
+        )
+        return
+
+    if job.kind == JobKind.SBOM_GENERATE.value:
+        from app.modules.sbom import lifecycle
+
+        asset_id = uuid.UUID(str(payload.get("asset_id") or "")) if payload.get("asset_id") else None
+        if asset_id is None:
+            raise ValueError("SBOM_GENERATE job payload is missing asset_id")
+        lifecycle.generate_snapshot(
+            db,
+            asset_id=asset_id,
+            trigger=str(payload.get("trigger") or "SCHEDULED"),
+            reason=str(payload.get("reason") or "MANUAL"),
+            branch=payload.get("branch"),
+            head_sha=payload.get("head_sha"),
+            job_id=job.id,
+            heartbeat=heartbeat,
+        )
+        return
+
+    if job.kind == JobKind.SBOM_VULNERABILITY_REASSESSMENT.value:
+        from app.modules.vulnerabilities import reassessment
+
+        raw_asset = payload.get("asset_id")
+        raw_snapshot = payload.get("sbom_id")
+        trigger = str(payload.get("trigger") or "SCHEDULED")
+        if raw_asset:
+            result = reassessment.reassess_asset(
+                db,
+                asset_id=uuid.UUID(str(raw_asset)),
+                trigger=trigger,
+                sbom_id=uuid.UUID(str(raw_snapshot)) if raw_snapshot else None,
+                job_id=job.id,
+            )
+            results = [result]
+        else:
+            aggregate = reassessment.reassess_all(db, trigger=trigger, job_id=job.id)
+            results = list(aggregate["results"])
+        new_ids: list[uuid.UUID] = []
+        for entry in results:
+            new_ids.extend(uuid.UUID(value) for value in entry.get("new_finding_ids", []))
+        if new_ids:
+            # Same policy boundary as a scan: analysis is queued only when AI is
+            # enabled and the finding clears the configured severity threshold.
+            automation.enqueue_auto_analysis(db, new_ids, origin="SBOM_REASSESSMENT")
         return
 
     raise ValueError(f"Unsupported job kind: {job.kind}")

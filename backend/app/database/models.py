@@ -7,6 +7,7 @@ from app.database.base import Base
 from app.modules.ai.models import AIExecution, InvestigationEvidence, SecurityInvestigation
 from app.modules.assets.models import Asset, AssetCredential
 from app.modules.findings.models import Finding, FindingHistory
+from app.modules.git_provider.models import WebhookDelivery
 from app.modules.knowledge_base.models import (
     AIFeedback,
     AssistantConversation,
@@ -15,7 +16,7 @@ from app.modules.knowledge_base.models import (
 )
 from app.modules.remediation.models import RemediationRecommendation
 from app.modules.risk_analysis.models import RiskAssessment
-from app.modules.sbom.models import Sbom, SbomPackage, SbomPackageEdge
+from app.modules.sbom.models import Sbom, SbomMonitoringRun, SbomPackage, SbomPackageEdge
 from app.modules.scans.models import Scan, ScannerExecution
 from app.modules.security_intelligence.models import (
     AssetRepositoryMetadata,
@@ -51,6 +52,7 @@ __all__ = [
     "RemediationVerification",
     "RiskAssessment",
     "Sbom",
+    "SbomMonitoringRun",
     "SbomPackage",
     "SbomPackageEdge",
     "Scan",
@@ -65,4 +67,5 @@ __all__ = [
     "VulnerabilityEpss",
     "VulnerabilityReference",
     "VulnerabilitySyncHistory",
+    "WebhookDelivery",
 ]

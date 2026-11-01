@@ -58,6 +58,7 @@ def list_findings(
     statuses: Sequence[str] | None = None,
     search: str | None = None,
     cve_id: str | None = None,
+    discovery_sources: Sequence[str] | None = None,
     sort_by: str = "severity",
     sort_order: str = "asc",
 ) -> tuple[list[Finding], int]:
@@ -69,6 +70,7 @@ def list_findings(
         statuses=statuses,
         search=search,
         cve_id=cve_id,
+        discovery_sources=discovery_sources,
     )
     column_factory = _SORT_COLUMNS.get(sort_by, _SORT_COLUMNS["severity"])
     column = column_factory()
@@ -106,7 +108,33 @@ def record_scan_findings(
     scan_id: uuid.UUID,
     normalized: Sequence[NormalizedFinding],
 ) -> dict[str, int]:
-    """Upsert normalized scanner findings for a completed scan stage.
+    """Record findings that a full scan produced."""
+    return record_findings(
+        db,
+        asset_id=asset_id,
+        scan_id=scan_id,
+        normalized=normalized,
+        discovery_source="FULL_SCAN",
+        actor="scanner",
+    )
+
+
+def record_findings(
+    db: Session,
+    *,
+    asset_id: uuid.UUID,
+    scan_id: uuid.UUID | None,
+    normalized: Sequence[NormalizedFinding],
+    discovery_source: str = "FULL_SCAN",
+    actor: str = "scanner",
+) -> dict[str, int]:
+    """Upsert normalized findings for an asset.
+
+    ``scan_id`` is optional because continuous SBOM reassessment has no scan:
+    it correlates a stored inventory, not a scanner run. Deduplication is
+    unchanged — identity is still ``(asset_id, fingerprint)`` — so a
+    vulnerability found by both paths is one finding with two evidence
+    sources, not two findings.
 
     Returns counts of created / updated / reopened findings.
     """
@@ -143,7 +171,8 @@ def record_scan_findings(
                 cvss_score=item.cvss_score,
                 status=FindingStatus.OPEN.value,
                 fingerprint=fingerprint,
-                metadata_json=metadata,
+                discovery_source=discovery_source,
+                metadata_json={**metadata, "evidence_sources": [discovery_source]},
                 first_detected_at=now,
                 last_detected_at=now,
             )
@@ -155,7 +184,7 @@ def record_scan_findings(
                     scan_id=scan_id,
                     event=FindingEvent.DETECTED.value,
                     to_status=FindingStatus.OPEN.value,
-                    actor="scanner",
+                    actor=actor,
                     note=f"Detected by {item.scanner}",
                 )
             )
@@ -164,12 +193,12 @@ def record_scan_findings(
             continue
 
         previous_status = row.status
-        row.last_scan_id = scan_id
+        row.last_scan_id = scan_id or row.last_scan_id
         row.last_detected_at = now
         row.severity = item.severity or row.severity
         row.title = item.title or row.title
         row.description = item.description or row.description
-        row.metadata_json = {**(row.metadata_json or {}), **metadata}
+        row.metadata_json = _merge_metadata(row.metadata_json, metadata, discovery_source)
         row.cve_id = row.cve_id or item.cve_id
         row.cvss_score = item.cvss_score if item.cvss_score is not None else row.cvss_score
         row.purl = row.purl or item.purl
@@ -184,13 +213,13 @@ def record_scan_findings(
                     event=FindingEvent.REOPENED.value,
                     from_status=previous_status,
                     to_status=row.status,
-                    actor="scanner",
-                    note="Finding reappeared in a later scan",
+                    actor=actor,
+                    note="Finding reappeared in a later assessment",
                 )
             )
             reopened += 1
         elif previous_status in {FindingStatus.FALSE_POSITIVE.value}:
-            # A subsequent scan detecting it again is new evidence: reopen.
+            # A subsequent detection is new evidence: reopen.
             row.status = FindingStatus.OPEN.value
             db.add(
                 FindingHistory(
@@ -199,7 +228,7 @@ def record_scan_findings(
                     event=FindingEvent.REOPENED.value,
                     from_status=previous_status,
                     to_status=row.status,
-                    actor="scanner",
+                    actor=actor,
                     note="Finding re-detected after being marked false positive",
                 )
             )
@@ -212,8 +241,9 @@ def record_scan_findings(
         "findings recorded",
         extra={
             "extra_fields": {
-                "scan_id": str(scan_id),
+                "scan_id": str(scan_id) if scan_id else None,
                 "asset_id": str(asset_id),
+                "discovery_source": discovery_source,
                 "created": created,
                 "updated": updated,
                 "reopened": reopened,
@@ -221,6 +251,52 @@ def record_scan_findings(
         },
     )
     return {"created": created, "updated": updated, "reopened": reopened}
+
+
+def _merge_metadata(
+    current: Any, incoming: dict[str, Any], discovery_source: str
+) -> dict[str, Any]:
+    """Merge scanner metadata, accumulating evidence provenance."""
+    merged = {**(current or {}), **incoming}
+    sources = merged.get("evidence_sources")
+    known = list(sources) if isinstance(sources, list) else []
+    if discovery_source not in known:
+        known.append(discovery_source)
+    merged["evidence_sources"] = known
+    return merged
+
+
+def resolve_finding(
+    db: Session,
+    finding: Finding,
+    *,
+    actor: str,
+    note: str,
+    scan_id: uuid.UUID | None = None,
+) -> bool:
+    """Move one finding to RESOLVED with an audit row. Returns True if changed.
+
+    Every caller must have positive evidence; this helper deliberately does not
+    decide *whether* resolution is justified.
+    """
+    previous_status = finding.status
+    if previous_status == FindingStatus.RESOLVED.value:
+        return False
+    finding.status = FindingStatus.RESOLVED.value
+    finding.resolved_at = _now()
+    db.add(
+        FindingHistory(
+            finding_id=finding.id,
+            scan_id=scan_id,
+            event=FindingEvent.AUTO_RESOLVED.value,
+            from_status=previous_status,
+            to_status=FindingStatus.RESOLVED.value,
+            actor=actor,
+            note=note,
+        )
+    )
+    db.flush()
+    return True
 
 
 def resolve_missing_findings(
@@ -236,7 +312,6 @@ def resolve_missing_findings(
     scanners that actually ran: callers pass ``scanners`` so findings owned by
     a failed or skipped scanner are never resolved by accident.
     """
-    now = _now()
     stmt = select(Finding).where(
         Finding.asset_id == asset_id,
         Finding.status.in_(ACTIVE_FINDING_STATUSES),
@@ -246,19 +321,12 @@ def resolve_missing_findings(
         stmt = stmt.where(Finding.scanner.in_(list(scanners)))
     rows = db.execute(stmt).scalars().all()
     for row in rows:
-        previous_status = row.status
-        row.status = FindingStatus.RESOLVED.value
-        row.resolved_at = now
-        db.add(
-            FindingHistory(
-                finding_id=row.id,
-                scan_id=scan_id,
-                event=FindingEvent.AUTO_RESOLVED.value,
-                from_status=previous_status,
-                to_status=FindingStatus.RESOLVED.value,
-                actor="system",
-                note="Not detected in the latest successful scan",
-            )
+        resolve_finding(
+            db,
+            row,
+            actor="system",
+            note="Not detected in the latest successful scan",
+            scan_id=scan_id,
         )
     db.flush()
     if rows:

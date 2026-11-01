@@ -65,6 +65,13 @@ class Finding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         String(24), nullable=False, default=FindingStatus.OPEN.value
     )
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: How the finding was first discovered: FULL_SCAN (a scanner run) or
+    #: SBOM_REASSESSMENT (stored inventory matched against stored intelligence).
+    #: Kept as the *first* discovery; later evidence is recorded in metadata so
+    #: provenance is never rewritten by a different code path.
+    discovery_source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="FULL_SCAN", server_default="FULL_SCAN"
+    )
 
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
 
@@ -91,6 +98,7 @@ class Finding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_findings_scanner", "scanner"),
         Index("ix_findings_cve", "cve_id"),
         Index("ix_findings_last_detected", "last_detected_at"),
+        Index("ix_findings_discovery_source", "discovery_source"),
     )
 
 

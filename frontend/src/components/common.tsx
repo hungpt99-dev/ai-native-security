@@ -2,7 +2,7 @@ import { ChevronLeft, ChevronRight, Inbox, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { FindingStatus, ScanStatus, Severity } from "@/lib/types";
+import type { FindingStatus, SbomFreshness, ScanStatus, Severity } from "@/lib/types";
 
 const severityTone: Record<Severity, "critical" | "high" | "medium" | "low" | "info" | "neutral"> = {
   CRITICAL: "critical",
@@ -39,6 +39,56 @@ const scanStatusTone: Record<ScanStatus, "success" | "running" | "danger" | "neu
 
 export function ScanStatusBadge({ status }: { status: ScanStatus }) {
   return <Badge tone={scanStatusTone[status] ?? "neutral"}>{status}</Badge>;
+}
+
+const freshnessTone: Record<
+  SbomFreshness,
+  "success" | "high" | "running" | "danger" | "medium" | "neutral"
+> = {
+  CURRENT: "success",
+  STALE: "high",
+  PENDING: "running",
+  FAILED: "danger",
+  UNKNOWN: "medium",
+  MISSING: "neutral",
+};
+
+/**
+ * Freshness is a claim about evidence, not a guess: CURRENT means a dependency
+ * check confirmed the composition, UNKNOWN means nobody has verified it yet.
+ */
+export function FreshnessBadge({ freshness }: { freshness: SbomFreshness }) {
+  return <Badge tone={freshnessTone[freshness] ?? "neutral"}>{freshness}</Badge>;
+}
+
+const monitoringTone: Record<
+  string,
+  "success" | "high" | "running" | "danger" | "medium" | "neutral"
+> = {
+  HEALTHY: "success",
+  DEGRADED: "danger",
+  RUNNING: "running",
+  UNKNOWN: "medium",
+  DISABLED: "neutral",
+};
+
+export function MonitoringStatusBadge({ status }: { status: string }) {
+  return <Badge tone={monitoringTone[status] ?? "neutral"}>{status}</Badge>;
+}
+
+const runStatusTone: Record<
+  string,
+  "success" | "high" | "running" | "danger" | "medium" | "neutral"
+> = {
+  SUCCEEDED: "success",
+  RUNNING: "running",
+  PARTIAL: "medium",
+  SKIPPED: "neutral",
+  FAILED: "danger",
+};
+
+export function RunStatusBadge({ status }: { status: string }) {
+  return <Badge tone={runStatusTone[status] ?? "neutral"}>{status}</Badge>;
 }
 
 export function PageHeader({

@@ -145,6 +145,97 @@ class JobKind(StrEnum):
     AI_INVESTIGATE = "AI_INVESTIGATE"
     AI_REMEDIATE = "AI_REMEDIATE"
     AI_VERIFY = "AI_VERIFY"
+    # Continuous SBOM lifecycle. These never run the full scanner pipeline.
+    SBOM_CHANGE_CHECK = "SBOM_CHANGE_CHECK"
+    SBOM_GENERATE = "SBOM_GENERATE"
+    SBOM_VULNERABILITY_REASSESSMENT = "SBOM_VULNERABILITY_REASSESSMENT"
+
+
+# --------------------------------------------------------------- SBOM lifecycle
+class SbomSnapshotReason(StrEnum):
+    """Why a snapshot was generated. Provenance only; never inferred data."""
+
+    FULL_SCAN = "FULL_SCAN"
+    INITIAL = "INITIAL"
+    DEPENDENCY_CHANGE = "DEPENDENCY_CHANGE"
+    WEBHOOK = "WEBHOOK"
+    MANUAL = "MANUAL"
+    #: The previous snapshot predates commit tracking, so composition can only
+    #: be re-established by generating a fresh baseline.
+    BASELINE = "BASELINE"
+
+
+class SbomGenerationStatus(StrEnum):
+    """State of a stored snapshot document.
+
+    A failed generation never creates a snapshot row: it is recorded as an
+    ``SBOM_GENERATION`` monitoring run with status FAILED, so a snapshot that
+    exists always has an intact document behind ``storage_key``.
+    """
+
+    READY = "READY"
+
+
+class SbomFreshness(StrEnum):
+    """Does the latest snapshot still describe the current repository?
+
+    ``UNKNOWN`` is a first-class state: when the provider cannot be reached and
+    the head commit differs, the platform must not claim the SBOM is current.
+    """
+
+    MISSING = "MISSING"
+    CURRENT = "CURRENT"
+    STALE = "STALE"
+    PENDING = "PENDING"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+class SbomMonitoringKind(StrEnum):
+    DEPENDENCY_CHECK = "DEPENDENCY_CHECK"
+    SBOM_GENERATION = "SBOM_GENERATION"
+    VULNERABILITY_REASSESSMENT = "VULNERABILITY_REASSESSMENT"
+
+
+class SbomMonitoringStatus(StrEnum):
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+
+class DependencyChangeOutcome(StrEnum):
+    """Deterministic result of a dependency change check."""
+
+    #: Head commit equals the commit the stored snapshot was generated at.
+    UNCHANGED = "UNCHANGED"
+    #: Commit moved but no dependency/build input path changed.
+    NO_DEPENDENCY_CHANGE = "NO_DEPENDENCY_CHANGE"
+    #: At least one dependency manifest/lockfile/build input changed.
+    DEPENDENCY_CHANGED = "DEPENDENCY_CHANGED"
+    #: No snapshot exists yet for the repository.
+    NO_SNAPSHOT = "NO_SNAPSHOT"
+    #: The provider could not be asked, or the diff base is unreachable.
+    UNKNOWN = "UNKNOWN"
+    #: The check itself failed (network, auth, provider error).
+    FAILED = "FAILED"
+
+
+class SbomChangeType(StrEnum):
+    ADDED = "ADDED"
+    REMOVED = "REMOVED"
+    VERSION_CHANGED = "VERSION_CHANGED"
+    UNCHANGED = "UNCHANGED"
+
+
+class SbomMonitoringTrigger(StrEnum):
+    SCHEDULED = "SCHEDULED"
+    WEBHOOK = "WEBHOOK"
+    MANUAL = "MANUAL"
+    INTEL_SYNC = "INTEL_SYNC"
+    SBOM_UPDATE = "SBOM_UPDATE"
+    FULL_SCAN = "FULL_SCAN"
 
 
 # --------------------------------------------------------------------------- AI

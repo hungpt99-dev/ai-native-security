@@ -11,7 +11,17 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_principal
 from app.api.v1 import ai as ai_api
-from app.api.v1 import ai_findings, dashboard, findings, jobs, remediation, sboms, scans, system
+from app.api.v1 import (
+    ai_findings,
+    dashboard,
+    findings,
+    jobs,
+    remediation,
+    sbom_monitoring,
+    sboms,
+    scans,
+    system,
+)
 from app.modules.assets.api import router as assets_router
 from app.modules.vulnerabilities.api import router as intel_router
 
@@ -20,6 +30,9 @@ api_router.include_router(system.router)
 api_router.include_router(assets_router)
 api_router.include_router(scans.router)
 api_router.include_router(sboms.router)
+# Continuous SBOM lifecycle routes must be mounted before the generic finding
+# routers only if paths could collide; these are distinct by design.
+api_router.include_router(sbom_monitoring.router)
 api_router.include_router(findings.router)
 api_router.include_router(intel_router)
 api_router.include_router(dashboard.router)

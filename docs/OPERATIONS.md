@@ -42,7 +42,9 @@ curl -fsS localhost:8000/api/v1/system/scanners
 | `scans`, `scanner_executions` | PostgreSQL | 90 days (`DELETE FROM scans WHERE created_at < now() - interval '90 days'`) |
 | `findings` | PostgreSQL | keep (history matters); resolved findings are cheap |
 | `finding_history` | PostgreSQL | keep, or prune by age |
-| `sboms` rows + files | PostgreSQL + storage volume | 30–90 days; delete the row **and** the object |
+| `sboms` rows + files | PostgreSQL + storage volume | 30–90 days; delete the row **and** the object. Never update a snapshot row — delete whole snapshots only |
+| `sbom_monitoring_runs` | PostgreSQL | 90 days (aggregates stop being meaningful after that) |
+| `webhook_deliveries` | PostgreSQL | 30 days (idempotency window) |
 | `jobs` (SUCCEEDED/FAILED) | PostgreSQL | 14 days |
 | `vulnerability_sync_history` | PostgreSQL | 30 days |
 
@@ -60,6 +62,74 @@ docker run --rm -v ai-native-security_sbom-data:/data -v "$PWD":/backup alpine \
 
 Restore in the reverse order (database first, then the volume), then run
 `alembic upgrade head` to be sure the schema matches the running image.
+
+## SBOM lifecycle operations
+
+Three operations, three budgets:
+
+| Operation | Schedule (default) | Cost | What it proves |
+| --- | --- | --- | --- |
+| `SCAN` | `ANS_SCANNER_SCHEDULE_INTERVAL_MINUTES` (240) | clone + Syft + Trivy/Semgrep/Gitleaks | composition **and** source-code issues |
+| `SBOM_CHANGE_CHECK` | `ANS_SBOM_DEPENDENCY_CHECK_INTERVAL_MINUTES` (60) | provider API / `git ls-remote` only | whether composition changed |
+| `SBOM_GENERATE` | on demand (webhook/check/manual) | clone + Syft | a new immutable snapshot |
+| `SBOM_VULNERABILITY_REASSESSMENT` | `ANS_SBOM_REASSESSMENT_INTERVAL_MINUTES` (1440) | database only | whether stored inventory is affected by current intel |
+
+Configuration:
+
+```bash
+ANS_SBOM_MONITORING_ENABLED=true
+ANS_SBOM_DEPENDENCY_CHECK_INTERVAL_MINUTES=60
+ANS_SBOM_REASSESSMENT_INTERVAL_MINUTES=1440
+ANS_SBOM_MAX_REASSESSMENT_COMPONENTS=5000   # ceiling per snapshot
+ANS_SBOM_REASSESS_AFTER_INTEL_SYNC=true     # reassess when a feed changes something
+ANS_WEBHOOK_SECRET=...                      # enables /webhooks/*, otherwise 503
+```
+
+Webhooks (recommended over polling):
+
+* GitHub: *Settings → Webhooks → Add webhook*, payload URL
+  `https://<host>/api/v1/webhooks/github`, content type `application/json`,
+  secret = `ANS_WEBHOOK_SECRET`, events: **push only**.
+* GitLab: *Settings → Webhooks*, URL `https://<host>/api/v1/webhooks/gitlab`,
+  secret token = `ANS_WEBHOOK_SECRET`, trigger: **Push events**.
+* Deliveries are recorded in `webhook_deliveries`; a repeated `X-GitHub-Delivery`
+  (or GitLab event UUID) is answered with `DUPLICATE` and enqueues nothing.
+
+### Routine SBOM checks
+
+| Question | Query / endpoint |
+| --- | --- |
+| Is composition monitoring running? | `GET /api/v1/schedules` → `asset-sbom-check:*`, `sbom:reassess` have a moving `next_run_at` |
+| Did monitoring skip full scans? | `GET /api/v1/sbom/monitoring/summary?days=7` → `estimated_full_scans_avoided`, `dependency_checks_unchanged` |
+| Which assets are stale or unknown? | `GET /api/v1/assets/{id}/sbom/status` → `freshness`, `freshness_detail` |
+| Did an evaluation fail? | `GET /api/v1/assets/{id}/sbom/monitoring-runs?kind=VULNERABILITY_REASSESSMENT&status=FAILED` |
+| Are findings coming from stored inventory? | `select discovery_source, count(*) from findings group by 1` |
+| Webhook health | `select action, count(*) from webhook_deliveries group by 1` |
+
+```sql
+-- assets whose latest evaluation did not succeed
+select asset_id, status, error_message, finished_at
+from sbom_monitoring_runs
+where kind = 'VULNERABILITY_REASSESSMENT'
+  and status in ('FAILED','PARTIAL')
+order by started_at desc limit 20;
+
+-- avoidable full scans: dependency checks that proved composition unchanged
+select count(*) from sbom_monitoring_runs
+where kind = 'DEPENDENCY_CHECK'
+  and outcome in ('UNCHANGED','NO_DEPENDENCY_CHANGE');
+```
+
+Guidance:
+
+* Do **not** lower `SBOM_VULNERABILITY_REASSESSMENT` below the feed cadence — it
+  only finds what the feeds already ingested.
+* If `freshness` stays `UNKNOWN`, the provider API and `git ls-remote` both
+  failed: fix egress/credentials rather than forcing snapshots, so the platform
+  stops claiming it cannot tell.
+* `PARTIAL` reassessments are not errors but they intentionally block
+  auto-resolution. Read `metrics.resolution_reasons` before assuming a finding
+  is stuck.
 
 ## Routine checks
 
@@ -176,6 +246,38 @@ By design: resolution only happens for scans that completed with **no** failed
 or timed-out scanner. If a scanner is unhealthy, old findings stay open until a
 clean scan runs.
 
+For reassessment the rule is stricter: a finding is resolved only when the exact
+installed version is still inventoried and stored ranges exclude it, or when the
+snapshot proves the package/version left the composition **and** the finding
+carries inventory provenance. A missing intelligence record, an unusable range
+(`GIT` events) or a truncated inventory never resolves anything.
+
+### SBOM freshness is UNKNOWN
+
+`UNKNOWN` means "not verified", not "broken". Common causes:
+
+1. no dependency check has run since the snapshot was generated (wait for the
+   hourly schedule or `POST /assets/{id}/sbom/check`);
+2. the provider API and `git ls-remote` both failed (egress, private repo token,
+   provider outage) — the run is stored as `PARTIAL` with `error_message`;
+3. the compare payload named the base commit as unreachable (force-push) — the
+   composition state cannot be derived, so nothing is claimed.
+
+### "A snapshot with this fingerprint and commit already exists"
+
+The partial unique index rejected a concurrent duplicate generation. The job is
+recorded as `SKIPPED`/`duplicate_snapshot`; this is the intended outcome, not an
+error. Full scans are exempt (each scan owns its artifact).
+
+### Reassessment says PARTIAL
+
+Either the inventory exceeded `ANS_SBOM_MAX_REASSESSMENT_COMPONENTS`, or some
+components had intelligence whose ranges cannot be evaluated for a version
+(GIT-only ranges, unparseable versions). The run stores `failure_count`,
+`unknown_evaluations` and `resolution_reasons`; resolutions are skipped
+deliberately. Raise the ceiling or accept missing evidence — never lower the bar
+by resolving on absence.
+
 ## Troubleshooting: AI
 
 | Symptom | Cause | Fix |
@@ -197,5 +299,15 @@ docker compose run --rm migrate            # migrations first
 docker compose up -d
 ```
 
-Migrations are additive in Phase 1; always take a backup before upgrading across
-revisions.
+Migrations are additive; always take a backup before upgrading across revisions.
+
+For the SBOM lifecycle revision (`2cf7e16e149a`):
+
+* existing snapshots are backfilled with `creation_reason='FULL_SCAN'`,
+  `generation_status='READY'` and `generated_at=created_at`;
+* `commit_sha` and the fingerprints stay `NULL` for those rows — they were not
+  recorded, and inventing them would be worse than admitting the gap. The first
+  new snapshot (or full scan) establishes the baseline;
+* the downgrade deletes schedules for the three new job kinds (their payloads
+  are meaningless to older code) and drops the new columns/tables; snapshot rows
+  and documents themselves are untouched.

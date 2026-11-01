@@ -23,8 +23,7 @@ from app.core.config import get_settings
 from app.core.enums import (
     ACTIVE_FINDING_STATUSES,
     SEVERITY_ORDER,
-    JobKind,
-    JobStatus,
+    SbomSnapshotReason,
     ScannerExecutionStatus,
     ScanStatus,
     Severity,
@@ -34,15 +33,15 @@ from app.modules.assets.models import Asset
 from app.modules.assets.service import resolve_access_token
 from app.modules.findings import service as findings_service
 from app.modules.findings.models import Finding
+from app.modules.sbom.dependencies import manifest_fingerprint
 from app.modules.sbom.service import store_sbom
 from app.modules.scanners.base import NormalizedFinding
 from app.modules.scanners.registry import enabled_scanners, get_syft
 from app.modules.scans.models import Scan, ScannerExecution
 from app.modules.security_intelligence import repository_metadata, snippets
 from app.modules.vulnerabilities.correlation import correlate_packages, enrich_scan_findings
-from app.workers import queue
+from app.workers import automation
 from app.workers.checkout import Checkout, cleanup_workspace, clone_repository, workspace_for_scan
-from app.workers.models import Job
 
 logger = get_logger(__name__)
 
@@ -135,7 +134,24 @@ def execute_scan(db: Session, scan_id: uuid.UUID, heartbeat: Heartbeat | None = 
                 version=sbom_document.tool_version,
                 result_count=len(sbom_document.packages),
             )
-            store_sbom(db, asset_id=asset.id, scan_id=scan.id, document=sbom_document)
+            # Record the same provenance a dependency-triggered snapshot gets,
+            # so diffing and unchanged-inventory detection work across both
+            # paths instead of only for SBOM updates.
+            manifests = manifest_fingerprint(
+                workspace,
+                max_files=settings.sbom_max_manifest_files,
+                max_bytes=settings.sbom_max_manifest_bytes,
+            )
+            store_sbom(
+                db,
+                asset_id=asset.id,
+                scan_id=scan.id,
+                document=sbom_document,
+                commit_sha=checkout.commit_sha,
+                branch=checkout.branch,
+                creation_reason=SbomSnapshotReason.FULL_SCAN.value,
+                manifest_fingerprint=manifests.fingerprint,
+            )
             packages = sbom_document.packages
             db.commit()
         except Exception as exc:
@@ -342,10 +358,10 @@ def execute_scan(db: Session, scan_id: uuid.UUID, heartbeat: Heartbeat | None = 
 
 
 def _enqueue_auto_analysis(db: Session, scan: Scan) -> int:
-    """Queue contextual risk analysis for the highest-risk new findings.
+    """Select the highest-risk new findings of a scan and hand them to policy.
 
-    Off by default in spirit (requires ``ai_enabled``) and bounded in count, so a
-    scan can never turn into an unbounded model spend.
+    ``workers.automation`` owns the enable/budget/threshold decision, so the
+    scan path and SBOM reassessment share one policy boundary.
     """
     settings = get_settings()
     if not settings.ai_enabled or not settings.ai_auto_analyze:
@@ -354,7 +370,7 @@ def _enqueue_auto_analysis(db: Session, scan: Scan) -> int:
     threshold = SEVERITY_ORDER.get(minimum, SEVERITY_ORDER[Severity.HIGH.value])
     severities = [name for name, rank in SEVERITY_ORDER.items() if rank <= threshold]
     rows = db.execute(
-        select(Finding)
+        select(Finding.id)
         .where(
             Finding.last_scan_id == scan.id,
             Finding.status.in_(ACTIVE_FINDING_STATUSES),
@@ -363,27 +379,7 @@ def _enqueue_auto_analysis(db: Session, scan: Scan) -> int:
         .order_by(Finding.cvss_score.desc().nullslast(), Finding.severity.asc())
         .limit(settings.ai_auto_analyze_max_findings)
     ).scalars().all()
-    if not rows:
-        return 0
-    queued = 0
-    for finding in rows:
-        pending = db.execute(
-            select(Job.id).where(
-                Job.kind == JobKind.AI_RISK.value,
-                Job.payload["finding_id"].astext == str(finding.id),
-                Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-            )
-        ).scalar_one_or_none()
-        if pending:
-            continue
-        queue.enqueue(
-            db,
-            JobKind.AI_RISK,
-            {"finding_id": str(finding.id), "asset_id": str(finding.asset_id)},
-        )
-        queued += 1
-    db.commit()
-    return queued
+    return automation.enqueue_auto_analysis(db, list(rows), origin="FULL_SCAN")
 
 
 def _checkout(
