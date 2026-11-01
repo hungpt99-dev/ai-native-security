@@ -474,8 +474,8 @@ Work is driven by measured gaps recorded in
 
 | Item | Why it matters | Status |
 | --- | --- | --- |
-| SBOM dependency graph population | Direct/transitive analysis is implemented but starved of data by the current Syft output | next |
-| SBOM and investigation screens | Data and endpoints exist; the UI surfaces stop short of dedicated screens | next |
+| SBOM dependency graph population | *Partially addressed*: snapshots now record commit, fingerprints, lineage and diffs, and the SBOM list/detail/compare screens exist — but the graph itself is still empty for directory scans |
+| Runtime vulnerability reassessment of container images | Current reassessment matches package ecosystems; image digests would extend it to container base layers | planned |
 | Feedback API and UI | Feedback storage exists and needs an endpoint plus a control in the finding panel | planned |
 | Policy authoring | Policies are versioned rows; publishing a new version still needs code or SQL | planned |
 | Cross-file taint analysis | Reachability currently stops at bounded snippets | planned |
