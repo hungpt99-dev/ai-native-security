@@ -1200,6 +1200,11 @@ def monitoring_summary(db: Session, *, days: int = 30) -> dict[str, Any]:
         "findings_created": sum(run.findings_created for run in reassessments),
         "findings_updated": sum(run.findings_updated for run in reassessments),
         "findings_resolved": sum(run.findings_resolved for run in reassessments),
+        # Reopenings are counted explicitly: a resolution that a later, better
+        # evidence pass reverses must not look like a silent disappearance.
+        "findings_reopened": sum(
+            int((run.metrics or {}).get("reopened", 0) or 0) for run in reassessments
+        ),
         "new_kev_findings": sum(run.new_kev_findings for run in reassessments),
         "avg_dependency_check_ms": _avg_duration(checks),
         "avg_generation_ms": _avg_duration(generations),

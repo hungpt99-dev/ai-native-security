@@ -269,6 +269,7 @@ export interface MonitoringSummary {
   findings_created: number;
   findings_updated: number;
   findings_resolved: number;
+  findings_reopened: number;
   new_kev_findings: number;
   avg_dependency_check_ms: number | null;
   avg_generation_ms: number | null;
