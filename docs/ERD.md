@@ -205,3 +205,96 @@ signature and token values are never stored).
   upgrade should be visible), so each SBOM owns its inventory.
 * `jobs` and `schedules` are operational tables; they are safe to prune
   independently of security data.
+
+## Security operations tables (2026-11)
+
+```mermaid
+erDiagram
+    ASSETS ||--o{ SECURITY_EVENTS : "attributed to (0..n)"
+    ASSETS ||--o{ INCIDENTS : "primary asset"
+    ASSETS ||--o{ INFRASTRUCTURE_SCANS : "assessed by"
+    ASSETS ||--o{ ASSETS : "parent (self-reference)"
+    INCIDENTS ||--o{ SECURITY_EVENTS : "groups"
+    INCIDENTS ||--o{ INCIDENT_TIMELINE : "timeline"
+    INCIDENTS ||--o{ INCIDENT_FINDINGS : "links"
+    FINDINGS ||--o{ INCIDENT_FINDINGS : "linked"
+    INCIDENTS ||--o{ INCIDENT_INVESTIGATIONS : "AI reports"
+    AI_EXECUTIONS ||--o| INCIDENT_INVESTIGATIONS : "records"
+    DETECTION_RULES ||--o{ SECURITY_EVENTS : "matched by"
+    SECURITY_EVENTS ||--o{ SECURITY_EVENT_NOTES : "notes"
+    THREAT_INTEL_INGESTS ||--o{ THREAT_INDICATORS : "batch provenance"
+```
+
+### `assets` (extended)
+
+`kind` defaults to `REPOSITORY` for every pre-existing row. `external_ref` is a
+provider-qualified identity (`docker://…`, `host://…`, `aws://…`) and is unique
+per kind through a partial index; `repo_url` remains unique for repositories and
+is `NULL` for other kinds. `parent_asset_id` expresses service→host,
+workload→cluster and similar relationships. Infrastructure assessment has its own
+cadence (`infra_scan_interval_minutes`) and status
+(`last_infra_scan_at`/`last_infra_scan_status`), independent of repository scans.
+
+### `security_events`
+
+Deduplicated telemetry. `fingerprint` is unique and derived from source, event
+type, asset, category and primary entity. `occurrence_count`,
+`first_seen_at`/`last_seen_at` collapse repeats. `raw` is bounded/redacted;
+`normalized` is the canonical field document used by rules and the UI;
+`indicators` is the extracted IOC list; `enrichment` holds asset resolution,
+matched rules, threshold results, threat matches and incident id. `rule_slug` and
+`rule_version` snapshot the rule that produced the detection. A partial unique
+index on `(source, source_event_id)` makes sensor replays idempotent.
+
+### `detection_rules`
+
+`slug` unique, `version` increments when conditions change, `conditions` is a
+validated DSL document, `threshold` holds the optional window aggregation,
+`enabled`/`severity` are operator-tunable, `create_incident`/`incident_priority`
+control incident creation. Built-in rules are version-upgraded in place; custom
+rules are never touched.
+
+### `incidents`
+
+`correlation_key` (rule + asset) groups evidence; open incidents with the same key
+inside the reuse window are re-used. `severity` is the worst attached event,
+`risk_score`/`priority` are deterministic, `status` follows the enforced state
+machine. `event_count`/`finding_count` are denormalized counters maintained by
+the service. `metadata` records the risk factor breakdown and the last AI report
+id.
+
+### `incident_timeline`
+
+Append-only. `kind` ∈ CREATED, EVENT_ATTACHED, FINDING_ATTACHED, STATUS_CHANGED,
+ASSIGNED, NOTE, AI_INVESTIGATION, REMEDIATION, CORRELATION. `actor` distinguishes
+`detection`, `analyst`, `ai`, `scheduler`.
+
+### `incident_findings`
+
+Explicit many-to-many with a `reason` (`same_asset_high_severity`,
+`same_cve_across_assets`, `manual`), unique per pair.
+
+### `incident_investigations`
+
+Append-only AI report for an incident: status (shared vocabulary with finding
+investigations), summary, confidence, evidence keys, missing information,
+recommended containment, attack steps, the full structured payload, the
+`ai_executions` row, model and prompt version. It never carries a status change.
+
+### `infrastructure_scans`
+
+One row per assessment: target kind (`IAC_REPOSITORY`, `CONTAINER_IMAGE`,
+`KUBERNETES_MANIFEST`, `CLOUD_CONFIG`), target reference, scanner, lifecycle,
+commit (for IaC), severity counters, command metadata and error. A partial unique
+index prevents two active assessments of the same target+scanner.
+
+### `threat_indicators` / `threat_intel_ingests`
+
+Indicators are unique per `(indicator_type, value, source)`; `confidence` is
+0-100, `expires_at` removes an indicator from matching. Ingest rows record the
+batch counts and rejected entries for auditability.
+
+### `audit_log`
+
+Append-only: actor, action, resource type/id, status, request id, IP, bounded
+redacted detail. No update/delete path exists.

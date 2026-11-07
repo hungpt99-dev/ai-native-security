@@ -205,3 +205,54 @@ pages them. Prompts, evidence text and credentials are never stored there.
 * The provider interface is synchronous (the application is). Async companions
   delegate to the same code path.
 * Retrieval is SQL-based; no vector database is used, and none is required yet.
+
+## 8. Incident investigation (cross-domain)
+
+`POST /api/v1/incidents/{id}/investigate` is the runtime-security counterpart of
+the finding investigation. It exists because a correlated incident is a different
+question: not "how risky is this CVE", but "what happened on this asset, and what
+should a human do now".
+
+```
+incident ─▶ load events/findings/asset ─▶ aggregate (≤12 groups, counted)
+         ─▶ build evidence (E1 incident, E2 asset, E3.. event groups, F.. findings)
+         ─▶ provider (structured schema) ─▶ citation validation ─▶ incident_investigations
+                                                              └─▶ timeline (AI_INVESTIGATION)
+```
+
+Design decisions:
+
+* **Aggregation before the model.** 500 identical Falco alerts become one
+  evidence block with `occurrences: 500`, first/last seen and a redacted sample.
+  Raw telemetry is never sent to a provider. The event cap, per-block cap and
+  `ANS_AI_MAX_INPUT_CHARS` bound the prompt; truncation is recorded in
+  `missing_information`.
+* **Missing context is explicit.** No resolved asset, no business profile, no
+  attached events and no linked findings are each reported as a gap. They lower
+  confidence, never risk.
+* **Citations are enforced.** Cited keys must exist in the supplied set. Unknown
+  keys are dropped from the report and from attack steps. If no citation
+  survives, the status is forced to `NEEDS_MANUAL_REVIEW` with an explicit
+  `no_valid_citations` entry.
+* **No state authority.** The service writes only `incident_investigations` and a
+  timeline entry. Incident status, severity, priority and risk are owned by
+  deterministic services. A failed provider still produces an `INCONCLUSIVE`
+  report with `error_code`, never a fabricated conclusion.
+* **Ledger.** The call is wrapped in `track_execution(kind=INCIDENT_INVESTIGATION)`
+  so tokens, cost, latency, attempts and failures appear in `/ai/executions` like
+  every other model call. Prompts are not stored unless explicitly enabled.
+
+Prompt `incident.investigation@1`, schema `IncidentInvestigationOutput@1`.
+Status vocabulary is shared with finding investigations
+(`CONFIRMED_IMPACT`, `POTENTIAL_IMPACT`, `NO_EVIDENCE_FOUND`, `INCONCLUSIVE`,
+`NEEDS_MANUAL_REVIEW`). `NO_EVIDENCE_FOUND` is not "benign".
+
+Additional guardrails:
+
+| Guardrail | Enforcement | Test |
+| --- | --- | --- |
+| No raw event stream to the model | aggregation caps + input budget | `test_evidence_is_bounded_and_counts_are_aggregated` |
+| No unverifiable conclusion | citation validation → `NEEDS_MANUAL_REVIEW` | `test_unknown_citations_are_dropped…` |
+| No incident state change | service writes AI tables only | `test_ai_investigation_persists_cited_report_and_ledger` |
+| Failure is labelled | `INCONCLUSIVE` + `error_code` + ledger row | `test_provider_failure_is_recorded_not_faked` |
+| AI unavailable is honest | explicit report, no call, no ledger fabrication | `test_unconfigured_ai_persists_a_labelled_inconclusive_report` |

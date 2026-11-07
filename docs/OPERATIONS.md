@@ -311,3 +311,119 @@ For the SBOM lifecycle revision (`2cf7e16e149a`):
 * the downgrade deletes schedules for the three new job kinds (their payloads
   are meaningless to older code) and drops the new columns/tables; snapshot rows
   and documents themselves are untouched.
+
+## Runtime security operations
+
+### 1. Enable telemetry ingestion
+
+```bash
+# .env
+ANS_EVENTS_INGEST_TOKEN=$(openssl rand -hex 32)
+ANS_EVENTS_AUTO_CREATE_ASSETS=true
+```
+
+Recreate the API and worker so both read the token. Verify:
+
+```bash
+curl -s localhost:8000/api/v1/ingest/health
+# {"configured":true,"max_batch":500}
+```
+
+Point Falco at `/api/v1/ingest/falco` with the token header (see
+`RUNTIME_SECURITY.md`). A quick smoke test:
+
+```bash
+curl -s -X POST localhost:8000/api/v1/ingest/falco \
+  -H "X-ANS-Ingest-Token: $ANS_EVENTS_INGEST_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"uuid":"smoke-1","priority":"Warning","rule":"Terminal shell in container",
+       "output":"shell","output_fields":{"proc.name":"bash",
+       "container.image.repository":"ghcr.io/acme/api","container.image.tag":"1.0"}}'
+```
+
+Expected: `202`, `created: 1`, one container asset auto-created, and the event
+visible at `/api/v1/events`.
+
+### 2. Triage an incident
+
+1. `GET /incidents?active_only=true&sort_by=risk_score` — highest deterministic
+   risk first.
+2. `GET /incidents/{id}` — read the timeline, attached events, linked findings.
+3. `PATCH /incidents/{id}` → `TRIAGING` / `INVESTIGATING` with a note.
+4. `POST /incidents/{id}/correlate` to pull same-asset events (±24 h) and
+   same-CVE findings across assets.
+5. `POST /incidents/{id}/investigate` for an AI explanation. It is evidence, not
+   a decision: review cited keys and missing information before acting.
+6. `CONTAINED` → `RESOLVED` when the evidence supports it, then `CLOSED`.
+   Reopening is allowed and recorded.
+
+There is no automatic containment. Containment actions in the AI report are
+recommendations for a human.
+
+### 3. Interpret monitoring health
+
+`GET /monitoring/health` reports `HEALTHY`, `DEGRADED`, `UNKNOWN` or `DISABLED`
+per control. `UNKNOWN` means "no evidence yet", not "fine".
+
+| Component | `DEGRADED` means | First check |
+| --- | --- | --- |
+| `repository_monitoring` | stale or failed last scans | `/assets`, `/scans?status=FAILED` |
+| `sbom_monitoring` | no check within 2× interval, or failures in 24 h | `/sbom/monitoring/summary` |
+| `threat_intelligence` | a source is older than its window | `/intelligence/sync-history` |
+| `event_ingestion` | no event for > 60 min (while configured) | sensor connectivity, token |
+| `job_queue` | failed jobs in 24 h or > 500 queued | `docker compose logs worker` |
+| `infrastructure` | failed assessments in 24 h | `/infrastructure/scans?status=FAILED` |
+
+### 4. Infrastructure assessments
+
+```bash
+# container image (registry must be allowlisted)
+curl -s -X POST localhost:8000/api/v1/infrastructure/scans \
+  -H 'Content-Type: application/json' \
+  -d '{"target_kind":"CONTAINER_IMAGE","scanner":"trivy-image","target_ref":"ghcr.io/acme/api:1.2.3"}'
+
+# IaC repository
+curl -s -X POST localhost:8000/api/v1/infrastructure/scans \
+  -H 'Content-Type: application/json' \
+  -d '{"target_kind":"IAC_REPOSITORY","scanner":"trivy-config","asset_id":"<repo-uuid>"}'
+```
+
+The worker clones (IaC only), runs the scanner in the hardened subprocess layer,
+writes findings through the normal pipeline, and deletes the workspace. Check
+`/infrastructure/scanners` first: a missing binary is reported as unavailable, not
+as an empty scan. Enable Checkov by building the worker with
+`INSTALL_CHECKOV=true`.
+
+### 5. Rotate tokens and retention
+
+* Rotate `ANS_EVENTS_INGEST_TOKEN` by updating `.env`, recreating API/worker, then
+  updating sensors. Old tokens stop working immediately.
+* Rotating `ANS_SECRET_KEY` invalidates stored repository credentials; re-enter
+  tokens after rotation.
+* Event and audit tables grow monotonically. Schedule a retention job appropriate
+  to your policy, for example:
+
+```sql
+DELETE FROM security_events
+WHERE last_seen_at < now() - interval '180 days'
+  AND incident_id IS NULL
+  AND status = 'CLOSED';
+```
+
+Never delete audit rows inside the retention window your compliance policy
+requires. Back up before deleting.
+
+### 6. Backup and restore
+
+The database is the system of record; SBOM documents live under
+`ANS_STORAGE_ROOT` (or the `sbom-data` volume). Back up both:
+
+```bash
+docker compose exec -T postgres pg_dump -U security security | gzip > backup-$(date +%F).sql.gz
+docker run --rm -v ai-native-security_sbom-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/sboms-$(date +%F).tar.gz -C /data .
+```
+
+Restore into a fresh PostgreSQL, run `alembic upgrade head`, restore the SBOM
+volume, then start worker/scheduler. Verify with `/readyz`, `/monitoring/health`
+and a scan of one repository.

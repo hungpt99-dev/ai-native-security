@@ -167,3 +167,61 @@ Known limitations recorded rather than hidden:
 * Ecosystems outside the Syft/OSV mapping (e.g. exotic package managers) are
   inventoried but not correlated; they are counted as evaluated without intel
   matches, never as safe.
+
+## 6. Platform evolution audit (runtime, infrastructure, incidents, threat intel)
+
+Audited at the start of this change against the running stack and commit
+`a226381`. Baseline evidence: 268 backend tests passed, frontend production build
+passed, `docker compose config` valid. The table records what was **missing**
+before and what exists now, verified by tests or a live request.
+
+| Capability | Before | After | Evidence |
+| --- | --- | --- | --- |
+| Asset kinds (container/host/cloud) | Missing — `assets` was repository-only (`repo_url NOT NULL`) | `assets.kind`, `external_ref`, `parent_asset_id`, independent infra cadence; `repo_url` nullable | migration `4a1b2c3d4e5f`; `test_infrastructure`, live auto-discovery of `ghcr.io/acme/api` |
+| Unified security events | Missing | `security_events` + `security_event_notes`, normalization, dedupe, enrichment, lifecycle API | `test_runtime_events` (10 tests) |
+| Detection rules | Missing (hardcoded thresholds only) | `detection_rules` with a validated DSL, 11 built-ins, custom authoring, versioning | `test_event_rules`, `test_runtime_events` |
+| Runtime ingestion (Falco) | Missing | `/ingest/falco` + `/ingest/events`, sensor token, bounded bodies | live 202 + event/incident created |
+| Anomaly detection | Missing | deterministic event-rate baseline job | `test_anomaly_pass_detects_a_rate_spike` |
+| Incidents | Missing | model, lifecycle machine, timeline, assignment, notes, correlation, deterministic risk | `test_incidents` (8 tests) |
+| AI incident investigation | Missing | cross-domain evidence aggregation, cited structured report, ledger, timeline | `test_incident_investigation` (6 tests) |
+| Threat intel IOCs | Missing (vulnerability feeds only) | `threat_indicators` + ingestion, normalization, expiry, event matching, summary | `test_threat_intel` (6 tests) |
+| Infrastructure scanning | Missing | Trivy config, Checkov (optional build arg), Trivy image, target allow-lists, worker job | parser tests + fake-adapter execution test |
+| Audit log | Missing | append-only `audit_log`, mutating-request middleware, domain records, read API | `test_monitoring_audit` |
+| Monitoring health | Missing | evidence-based component health + unified overview | live `/monitoring/health` returned component statuses |
+| Frontend operations surfaces | Missing | monitoring, incidents list/detail, infrastructure, dashboard strip | `npm run build` green |
+
+**Defects found and fixed while auditing**
+
+1. `InfrastructureScan.metadata` / `Incident.metadata` collided with SQLAlchemy's
+   declarative `Base.metadata` when serialized through Pydantic aliases. Both
+   response schemas now expose `metadata_json` explicitly.
+2. The threshold rule initially counted matching events across all groups, so ten
+   failures from ten different IPs produced a false incident. Grouping is now
+   applied before counting (`test_events_from_different_addresses_do_not_aggregate`).
+3. Replaying the same Falco alert with the same `uuid` inflated occurrence counts.
+   A partial unique index on `(source, source_event_id)` makes replay a no-op.
+4. The scheduler created repository scan schedules for non-repository assets
+   after the asset model gained kinds; both repository schedules are now gated on
+   `kind = REPOSITORY`, and provider/asset lists are filtered to repositories so
+   container images do not appear as "repositories" in the dashboard.
+5. `alembic drop_constraint` was double-prefixing the schedule-kind constraint
+   under the project naming convention; corrected and verified with a full
+   `upgrade → downgrade base → upgrade` cycle.
+
+**Still missing (not claimed as done)**
+
+Reachability/taint analysis, PR check integration, license policy, provenance
+signing, Kubernetes/cloud/IAM collectors, DLP, vector retrieval, audit and
+indicator UI. See `ROADMAP.md` for status and ordering.
+
+## 7. Verification record (2026-11-07)
+
+| Check | Result |
+| --- | --- |
+| Backend tests | 326 passed (`pytest -q`) |
+| Frontend build | `tsc -b && vite build` passed (1738 modules) |
+| Alembic upgrade/downgrade | full cycle on a scratch database, then applied to the live stack |
+| Docker images | api, worker, scheduler, frontend, migrate built |
+| Live ingestion | Falco Critical event → 1 event, 1 container asset, 1 P1 incident (risk 86) |
+| Live monitoring | `/monitoring/health` reports per-control evidence; ingestion `UNKNOWN` before first event, `HEALTHY` after |
+| Audit | ingest + rule change requests recorded with actor, status, request id |

@@ -300,3 +300,81 @@ deterministic endpoints keep working.
 | 409 | conflict (duplicate repo, active scan, illegal transition, sync already queued) |
 | 422 | validation error (URL, payload, filter values) |
 | 500 | unexpected server error (details are logged, never returned) |
+
+## Security operations API (2026-11)
+
+All routes below (except ingest and webhooks) require the standard API key when
+`ANS_AUTH_ENABLED=true`, and honour per-key asset scope.
+
+### Ingestion (sensor token)
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/ingest/falco` | Falco HTTP output; single object or array; `X-ANS-Ingest-Token`; 503 when unset, 401 when wrong |
+| POST | `/ingest/events` | `{"events": [...]}` generic schema; same token |
+| GET | `/ingest/health` | `{configured, max_batch}` — no secrets |
+
+### Security events
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/events` | filters: `category[]`, `source[]`, `severity[]`, `status[]`, `asset_id`, `incident_id`, `search`, `since`, `sort_by`, `sort_order` |
+| GET | `/events/summary` | 24h (configurable) totals, by category/severity, hourly series |
+| GET | `/events/{id}` | detail including bounded `raw`, normalized fields, indicators, enrichment |
+| GET | `/events/{id}/notes` | analyst notes |
+| POST | `/events/{id}/notes` | add a note |
+| POST | `/events/{id}/acknowledge` | OPEN → ACKNOWLEDGED |
+| POST | `/events/{id}/close` | close with optional `?reason=` |
+| GET | `/events/rules` | detection rules (built-in + custom) |
+| POST | `/events/rules` | create a custom rule (conditions validated) |
+| PATCH | `/events/rules/{id}` | enable/disable, severity, threshold; conditions only for CUSTOM |
+
+### Incidents
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/incidents` | `status[]`, `severity[]`, `priority[]`, `asset_id`, `category`, `search`, `active_only` |
+| GET | `/incidents/summary` | active count, by status/severity, top open |
+| GET | `/incidents/{id}` | incident, asset, events, linked findings, full timeline |
+| PATCH | `/incidents/{id}` | `{status, note?}` — transition matrix enforced |
+| POST | `/incidents/{id}/assign` | `{assignee}` |
+| POST | `/incidents/{id}/notes` | add a timeline note |
+| POST | `/incidents/{id}/correlate` | attach related events (same asset, ±24h) and same-CVE findings |
+| POST | `/incidents/{id}/investigate` | AI cross-domain investigation (append-only; cannot change the incident) |
+| GET | `/incidents/{id}/investigations` | investigation history |
+
+### Infrastructure
+
+| Method | Path | Description |
+| --- | --- | --- |
+| POST | `/infrastructure/scans` | `{target_kind, scanner, asset_id? , target_ref?}` → PENDING + job |
+| GET | `/infrastructure/scans` | list (`asset_id`, `status[]`, `scanner`, `target_kind`) |
+| GET | `/infrastructure/scans/{id}` | detail with command metadata and error |
+| POST | `/infrastructure/scans/{id}/retry` | new assessment with the same target |
+| GET | `/infrastructure/summary` | counts, open findings by severity, scanner availability |
+| GET | `/infrastructure/scanners` | availability probe per adapter |
+| POST | `/infrastructure/assets` | register a `CONTAINER_IMAGE`/`HOST`/cloud asset |
+| GET | `/infrastructure/assets` | list non-repository assets (`kind`) |
+
+### Threat intelligence
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/threat-intel/indicators` | filter by `indicator_type`, `source`, `value`, `active` |
+| POST | `/threat-intel/indicators` | batch `{source, indicators:[...]}` (≤1000); per-item errors reported, never silently dropped |
+| POST | `/threat-intel/indicators/{id}/deactivate` | stop matching an indicator |
+| GET | `/threat-intel/summary` | active counts by type/source, last ingest |
+
+### Monitoring and audit
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/monitoring/health` | per-control evidence status (`HEALTHY`/`DEGRADED`/`UNKNOWN`/`DISABLED`) |
+| GET | `/monitoring/overview` | assets by kind, findings by severity, incidents, 24h events, overall health |
+| GET | `/audit` | append-only audit log (`actor`, `action`, `resource_type`, `resource_id`, `search`) |
+
+Status codes follow the existing envelope. New capability-specific responses:
+ingestion `503 service_unavailable` when the sensor token is unset, `401` on a
+wrong token, `422` on an oversized/invalid batch, `409` when an equivalent
+infrastructure assessment is already active, `422` for a non-allowlisted image
+registry or an invalid rule condition.

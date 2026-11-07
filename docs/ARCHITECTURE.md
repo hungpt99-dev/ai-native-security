@@ -330,3 +330,75 @@ intelligence, operations.
   S3 later, with keys validated against the root to block traversal.
 * **No Celery yet.** A single `jobs` table is enough for one worker; the
   interface is deliberately narrow so it can be swapped.
+
+## Security domains (runtime, infrastructure, incidents)
+
+The platform keeps the modular monolith and adds four modules that share the
+existing asset/finding/queue infrastructure instead of forking it:
+
+```
+app/modules/
+├── events/        # ingestion, normalization, detection rules, anomaly, event API
+├── incidents/     # lifecycle, timeline, correlation, deterministic risk
+├── infrastructure/# IaC/image assessment adapters + scan service
+├── threat_intel/  # IOC storage, ingestion, exact matching
+├── audit/         # append-only audit log + request middleware
+└── monitoring/    # evidence-based health and unified overview
+```
+
+### Unified asset inventory
+
+`assets` now carries `kind` (`REPOSITORY`, `CONTAINER_IMAGE`, `HOST`,
+`CLOUD_RESOURCE`, `KUBERNETES_WORKLOAD`, `API_SERVICE`), an `external_ref`
+(unique per kind, e.g. `docker://nginx:1.25`, `host://api-01`) and an optional
+`parent_asset_id`. Repository assets keep `repo_url`; non-repository assets have
+`repo_url = NULL`. One table means one owner, one criticality profile, one
+finding stream — container findings and repository findings are triaged the same
+way.
+
+### Event pipeline
+
+```
+sensor → /ingest → normalize → asset resolve → fingerprint (dedupe)
+       → threat-intel match → signature rules → threshold rules
+       → deterministic risk → incident create/attach → timeline
+```
+
+The pipeline is synchronous inside the API request and bounded at every step
+(batch, body, field, scan window). No queue is needed for ingestion: the work is
+a handful of indexed writes. See `RUNTIME_SECURITY.md` for the contract.
+
+### Infrastructure assessment
+
+`INFRA_SCAN` is a worker job. The API creates a `PENDING` row and enqueues; the
+worker clones (IaC targets only), runs Trivy/Checkov through the hardened
+subprocess layer, records findings through `findings.service.record_findings`
+(`discovery_source=INFRASTRUCTURE_SCAN`), and stores counts/command/error on the
+scan row. Container images are pulled by the scanner; the platform never needs a
+Docker socket.
+
+### Incidents and correlation
+
+Incidents are created only by detection rules (or correlation), never by AI.
+`correlation_key = rule_slug:asset` plus a reuse window prevents alert storms from
+creating incident storms. Risk is deterministic
+(`incidents/risk.py`, version `incident-risk/1`). The timeline is append-only and
+is the investigation record. AI investigation reads an aggregated, bounded
+evidence set and appends a report; it cannot change status, severity, priority or
+risk.
+
+### Why no new infrastructure
+
+Events, incidents and audits are PostgreSQL rows with indexed query paths; the
+existing `FOR UPDATE SKIP LOCKED` queue already provides retries and recovery.
+Kafka/Redis would add operational surface without a measured need at this scale.
+Module boundaries (`api.py`, `service.py`, `models.py`, `scanners.py`) keep each
+domain extractable later.
+
+### Frontend
+
+New surfaces reuse the existing shell and primitives: `/monitoring`
+(health strip, event table, detail dialog, rule toggles), `/incidents` and
+`/incidents/:id` (lifecycle, timeline, evidence, AI report), `/infrastructure`
+(scanner availability, scans, assets) and a security-operations strip on the
+dashboard. All data is real API data; empty and error states are explicit.

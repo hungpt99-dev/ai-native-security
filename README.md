@@ -53,9 +53,10 @@ arithmetic, policy and re-scans remain the only authority on what is true.
 | Stage | What happens | Who decides |
 | --- | --- | --- |
 | **Understand** | Repositories, languages, frameworks, manifests, dependency inventory and business context (criticality, exposure, environment, owner) | Deterministic collectors |
-| **Detect** | Trivy, Semgrep, Gitleaks and Syft run in an isolated worker; findings are normalized and deduplicated by semantic fingerprint | Scanner binaries |
-| **Correlate** | OSV matches the exact installed version; NVD, CISA KEV and EPSS enrich severity and exploit likelihood | Deterministic code |
-| **Investigate** | A LangGraph workflow feeds a versioned security context to an LLM and produces an evidence-cited report | AI, with citations |
+| **Detect** | Trivy, Semgrep, Gitleaks, Syft, Trivy config/image and optional Checkov run in an isolated worker; findings are normalized and deduplicated by semantic fingerprint | Scanner binaries |
+| **Monitor** | Security telemetry (Falco, log shippers) is normalized, deduplicated and matched against versioned deterministic rules and threat intelligence | Detection rules |
+| **Correlate** | OSV matches the exact installed version; NVD, CISA KEV and EPSS enrich severity; runtime events correlate into incidents by asset, time, CVE and indicator | Deterministic code |
+| **Investigate** | A LangGraph workflow (finding) and a cross-domain incident investigator feed a bounded, versioned evidence set to an LLM and produce evidence-cited reports | AI, with citations |
 | **Prioritise** | Eight deterministic signals and an AI judgement are blended by a versioned policy — CVSS, deterministic, AI, final and confidence are stored separately | Policy + evidence |
 | **Remediate** | The model proposes a strategy and optionally a patch; every proposed version is re-checked against authoritative fixed-version data | AI proposes, code validates |
 | **Verify** | A human approves, a new scan runs, and the platform compares versions and findings before/after — including new risk introduced by the fix | Scan evidence only |
@@ -268,7 +269,15 @@ not exist yet.
 | **Policy engine** | Versioned risk, remediation and data-sharing policies applied at runtime and recorded on each assessment | `PARTIAL` — read/apply implemented; authoring a new version is still code or SQL work |
 | **Knowledge retrieval** | Decision history, similar-rule history, remediation success history, transcript search | `IMPLEMENTED` |
 | **Application architecture mapping** | Call graphs, symbol-level reachability, cross-file taint analysis | `PLANNED` |
-| **Runtime security intelligence** | Live telemetry, RASP, traffic evidence | `PLANNED` |
+| **Runtime event pipeline** | Falco and generic ingestion, normalization, dedupe, 11 deterministic rules, threshold rules, anomaly baseline, incident creation, threat-intel matching; events and incidents are first-class API and UI surfaces | `IMPLEMENTED` |
+| **Infrastructure security** | Container image assessment (Trivy), IaC/configuration scanning (Trivy config, optional Checkov), unified asset inventory (`CONTAINER_IMAGE`, `HOST`, …), scheduled per-asset cadence | `IMPLEMENTED` |
+| **Incident management** | Deterministic risk and priority, enforced lifecycle, append-only timeline, assignment, correlation across events/findings/CVEs | `IMPLEMENTED` |
+| **AI incident investigation** | Cross-domain evidence aggregation (bounded), cited structured report, append-only, cannot change incident state | `IMPLEMENTED` |
+| **Threat intelligence IOCs** | IP/domain/URL/hash/email indicator storage, normalization, expiry, exact matching on events, source attribution | `IMPLEMENTED` (API only — no indicator UI) |
+| **Audit log** | Append-only audit of every mutating API request plus domain actions, read API | `IMPLEMENTED` (API only — no UI) |
+| **Monitoring health** | Evidence-based status per control (database, repository monitoring, SBOM, intel freshness, ingestion lag, queue, infrastructure, AI) | `IMPLEMENTED` |
+| **Network / identity / cloud / data security** | Event-model support and rules for network, identity and data categories; no packet capture, directory sync, cloud IAM collectors or DLP | `PARTIAL` — see [roadmap](docs/ROADMAP.md) |
+| **Runtime sensor** | Falco is the supported sensor; the platform ingests and analyses, it does not ship an agent | `PARTIAL` — deployment prerequisite, documented |
 | **Pull-request automation** | Opening fix PRs | `PLANNED` |
 
 ## Screenshots
@@ -480,7 +489,8 @@ Work is driven by measured gaps recorded in
 | Policy authoring | Policies are versioned rows; publishing a new version still needs code or SQL | planned |
 | Cross-file taint analysis | Reachability currently stops at bounded snippets | planned |
 | Deployment verification | Confirming a fix reached an environment needs a deployment integration | planned |
-| Runtime security intelligence | Live traffic and RASP evidence would make exposure claims verifiable | planned |
+| Network/identity/cloud collectors | The event model, rules and incident correlation are implemented; collectors for packets, directory/IAM and cloud APIs are not | planned |
+| Threat-intel and audit UI | Both have working APIs and no dedicated screen yet | planned |
 | Pull-request automation | Turning an approved proposal into a PR — deliberately not automated yet | planned |
 
 ## Security philosophy
@@ -519,6 +529,9 @@ controls — prompt injection, data sharing, hallucination guards, spend limits 
 | Read the data model | [ERD](docs/ERD.md) |
 | Know what is implemented versus missing | [Feature audit](docs/FEATURE_AUDIT.md) |
 | Threat model for untrusted repositories | [Security notes](docs/SECURITY.md) |
+| Runtime events, detection rules, incidents | [Runtime security](docs/RUNTIME_SECURITY.md) |
+| Trust boundaries and enforcement map | [Security model](docs/SECURITY_MODEL.md) |
+| What is done, partial or planned | [Roadmap](docs/ROADMAP.md) |
 | Contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Contributing
