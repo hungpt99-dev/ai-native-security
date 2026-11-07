@@ -28,6 +28,8 @@ from app.workers.models import Schedule
 logger = get_logger(__name__)
 
 ADVISORY_LOCK_KEY = 918273645
+RUNTIME_ANOMALY_SCHEDULE = "runtime:anomaly"
+INFRA_SCHEDULE_PREFIX = "asset-infra-scan:"
 _shutdown = False
 
 
@@ -85,27 +87,59 @@ def sync_asset_schedules(db: Session) -> int:
     assets = db.execute(select(Asset).where(Asset.monitoring_enabled.is_(True))).scalars().all()
     active_names: set[str] = set()
     active_check_names: set[str] = set()
+    active_infra_names: set[str] = set()
     for asset in assets:
-        minutes = asset.scan_interval_minutes or settings.scanner_schedule_interval_minutes
-        name = f"asset-scan:{asset.id}"
-        active_names.add(name)
-        _upsert_schedule(
-            db,
-            name=name,
-            kind=JobKind.SCAN,
-            interval_seconds=max(300, minutes * 60),
-            payload={"asset_id": str(asset.id)},
+        # Repository scanning and SBOM monitoring only apply to repository
+        # assets. A container image has no branch, no clone and no SBOM update
+        # path; it is covered by the infrastructure schedule below.
+        if asset.kind == "REPOSITORY":
+            minutes = asset.scan_interval_minutes or settings.scanner_schedule_interval_minutes
+            name = f"asset-scan:{asset.id}"
+            active_names.add(name)
+            _upsert_schedule(
+                db,
+                name=name,
+                kind=JobKind.SCAN,
+                interval_seconds=max(300, minutes * 60),
+                payload={"asset_id": str(asset.id)},
+            )
+            check_name = f"{DEPENDENCY_CHECK_SCHEDULE_PREFIX}{asset.id}"
+            active_check_names.add(check_name)
+            _upsert_schedule(
+                db,
+                name=check_name,
+                kind=JobKind.SBOM_CHANGE_CHECK,
+                interval_seconds=max(300, settings.sbom_dependency_check_interval_minutes * 60),
+                payload={"asset_id": str(asset.id), "trigger": "SCHEDULED"},
+                enabled=settings.sbom_monitoring_enabled,
+            )
+        # Infrastructure assessment is opt-in per repository (an interval must be
+        # set) and automatic for container images, which have no other coverage.
+        infra_scanner = (
+            "trivy-image" if asset.kind == "CONTAINER_IMAGE" else "trivy-config"
         )
-        check_name = f"{DEPENDENCY_CHECK_SCHEDULE_PREFIX}{asset.id}"
-        active_check_names.add(check_name)
-        _upsert_schedule(
-            db,
-            name=check_name,
-            kind=JobKind.SBOM_CHANGE_CHECK,
-            interval_seconds=max(300, settings.sbom_dependency_check_interval_minutes * 60),
-            payload={"asset_id": str(asset.id), "trigger": "SCHEDULED"},
-            enabled=settings.sbom_monitoring_enabled,
+        wants_infra = settings.infrastructure_enabled and (
+            asset.kind == "CONTAINER_IMAGE"
+            or (asset.kind == "REPOSITORY" and asset.infra_scan_interval_minutes is not None)
         )
+        if wants_infra:
+            infra_name = f"{INFRA_SCHEDULE_PREFIX}{asset.id}"
+            active_infra_names.add(infra_name)
+            _upsert_schedule(
+                db,
+                name=infra_name,
+                kind=JobKind.INFRA_SCAN,
+                interval_seconds=max(
+                    300,
+                    (asset.infra_scan_interval_minutes
+                     or settings.infrastructure_scan_interval_minutes) * 60,
+                ),
+                payload={
+                    "asset_id": str(asset.id),
+                    "scanner": infra_scanner,
+                    "trigger": "SCHEDULED",
+                },
+            )
     # Disable schedules for assets that are no longer monitored.
     for schedule in db.execute(select(Schedule).where(Schedule.name.like("asset-scan:%"))).scalars():
         if schedule.name not in active_names:
@@ -114,6 +148,11 @@ def sync_asset_schedules(db: Session) -> int:
         select(Schedule).where(Schedule.name.like(f"{DEPENDENCY_CHECK_SCHEDULE_PREFIX}%"))
     ).scalars():
         if schedule.name not in active_check_names:
+            schedule.enabled = False
+    for schedule in db.execute(
+        select(Schedule).where(Schedule.name.like(f"{INFRA_SCHEDULE_PREFIX}%"))
+    ).scalars():
+        if schedule.name not in active_infra_names:
             schedule.enabled = False
     db.commit()
     return len(active_names)
@@ -158,6 +197,15 @@ def ensure_default_schedules(db: Session) -> None:
         interval_seconds=max(3600, settings.sbom_reassessment_interval_minutes * 60),
         payload={"trigger": "SCHEDULED"},
         enabled=settings.sbom_monitoring_enabled,
+    )
+    # Deterministic event-rate anomaly pass. It reads stored events only.
+    _upsert_schedule(
+        db,
+        name=RUNTIME_ANOMALY_SCHEDULE,
+        kind=JobKind.RUNTIME_ANOMALY_SCAN,
+        interval_seconds=max(3600, settings.events_anomaly_interval_minutes * 60),
+        payload={"trigger": "SCHEDULED"},
+        enabled=settings.events_anomaly_enabled,
     )
     # Policies are data; seeding them here keeps a fresh install usable without a
     # manual step and without writing during a read path.
@@ -205,6 +253,45 @@ def claim_due_schedules(db: Session, limit: int = 20) -> list[Schedule]:
                 schedule.last_status = scan.status
                 schedule.last_error = None
                 payload = {**payload, "scan_id": str(scan.id)}
+            elif schedule.kind == JobKind.INFRA_SCAN.value:
+                raw_asset_id = payload.get("asset_id")
+                asset = db.get(Asset, uuid.UUID(str(raw_asset_id))) if raw_asset_id else None
+                if asset is None or not asset.monitoring_enabled:
+                    schedule.enabled = False
+                    schedule.last_status = "SKIPPED"
+                    schedule.last_error = "Asset missing or monitoring disabled"
+                    continue
+                from app.core.errors import ConflictError
+                from app.modules.infrastructure import service as infra_service
+
+                scanner = str(payload.get("scanner") or "trivy-config")
+                try:
+                    target_kind = (
+                        "CONTAINER_IMAGE"
+                        if asset.kind == "CONTAINER_IMAGE"
+                        else "IAC_REPOSITORY"
+                    )
+                    row = infra_service.create_scan(
+                        db,
+                        target_kind=target_kind,
+                        scanner=scanner,
+                        asset_id=asset.id if asset.kind != "CONTAINER_IMAGE" else None,
+                        target_ref=(
+                            (asset.external_ref or "").removeprefix("docker://")
+                            if asset.kind == "CONTAINER_IMAGE"
+                            else None
+                        ),
+                        requested_by="scheduler",
+                        trigger="SCHEDULED",
+                    )
+                except ConflictError:
+                    schedule.last_status = "SKIPPED"
+                    schedule.last_error = "Assessment already active"
+                    schedule.next_run_at = now + timedelta(seconds=schedule.interval_seconds)
+                    continue
+                schedule.last_job_id = None
+                schedule.last_status = row.status
+                schedule.last_error = None
             else:
                 # Idempotent enqueue: a periodic job that is already pending for
                 # the same target must not be queued twice.

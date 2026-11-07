@@ -234,6 +234,8 @@ def resolve_head_commit(
     gives us the changed file list; ``git ls-remote`` is a refs-only fallback.
     Both failures are reported, never guessed around.
     """
+    if not asset.repo_url:
+        return None, None, "asset has no repository URL"
     token: str | None = None
     try:
         token = resolve_access_token(db, asset)
@@ -276,6 +278,8 @@ def compare_commits(
     client: RepositoryProviderClient | None = None,
 ) -> CommitComparison | None:
     """Changed paths between two commits, or ``None`` when unknown."""
+    if not asset.repo_url:
+        return None
     token: str | None = None
     try:
         token = resolve_access_token(db, asset)
@@ -614,6 +618,8 @@ def generate_snapshot(
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise NotFoundError("Asset not found", details={"asset_id": str(asset_id)})
+    if not asset.repo_url:
+        raise ValidationError("Asset has no repository URL")
     settings = get_settings()
     resolved_branch = validate_branch_name(branch or asset.default_branch)
 

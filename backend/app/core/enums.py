@@ -8,6 +8,28 @@ from enum import StrEnum
 class Provider(StrEnum):
     GITHUB = "GITHUB"
     GITLAB = "GITLAB"
+    #: Non-git sources (container registries, cloud APIs) use their own kind.
+    NONE = "NONE"
+
+
+class AssetKind(StrEnum):
+    """What an inventory row describes.
+
+    Repositories were the first asset type; infrastructure and runtime security
+    add the others. One table keeps ownership, criticality and findings
+    consistent across domains instead of forking the inventory.
+    """
+
+    REPOSITORY = "REPOSITORY"
+    CONTAINER_IMAGE = "CONTAINER_IMAGE"
+    HOST = "HOST"
+    CLOUD_RESOURCE = "CLOUD_RESOURCE"
+    KUBERNETES_WORKLOAD = "KUBERNETES_WORKLOAD"
+    API_SERVICE = "API_SERVICE"
+
+
+ASSET_KINDS = tuple(kind.value for kind in AssetKind)
+
 
 
 class ScanStatus(StrEnum):
@@ -149,6 +171,10 @@ class JobKind(StrEnum):
     SBOM_CHANGE_CHECK = "SBOM_CHANGE_CHECK"
     SBOM_GENERATE = "SBOM_GENERATE"
     SBOM_VULNERABILITY_REASSESSMENT = "SBOM_VULNERABILITY_REASSESSMENT"
+    #: Infrastructure / IaC / container image assessment.
+    INFRA_SCAN = "INFRA_SCAN"
+    #: Deterministic statistical pass over stored security events.
+    RUNTIME_ANOMALY_SCAN = "RUNTIME_ANOMALY_SCAN"
 
 
 # --------------------------------------------------------------- SBOM lifecycle
@@ -244,6 +270,9 @@ class AIExecutionKind(StrEnum):
     INVESTIGATION = "INVESTIGATION"
     REMEDIATION = "REMEDIATION"
     ASSISTANT = "ASSISTANT"
+    #: Cross-domain investigation of a correlated incident (runtime/network/
+    #: identity evidence), not a single finding.
+    INCIDENT_INVESTIGATION = "INCIDENT_INVESTIGATION"
 
 
 class AIExecutionStatus(StrEnum):
@@ -421,3 +450,204 @@ class PolicyKind(StrEnum):
 
 
 POLICY_KINDS = tuple(kind.value for kind in PolicyKind)
+
+
+# ------------------------------------------------------- unified security events
+class EventCategory(StrEnum):
+    """Security domain an event belongs to.
+
+    Domains stay separate in storage; the shared event model is what lets
+    runtime, network and identity evidence be correlated into one incident.
+    """
+
+    RUNTIME = "RUNTIME"
+    NETWORK = "NETWORK"
+    IDENTITY = "IDENTITY"
+    INFRASTRUCTURE = "INFRASTRUCTURE"
+    APPLICATION = "APPLICATION"
+    DATA = "DATA"
+
+
+EVENT_CATEGORIES = tuple(category.value for category in EventCategory)
+
+
+class EventSource(StrEnum):
+    FALCO = "FALCO"
+    KUBERNETES_AUDIT = "KUBERNETES_AUDIT"
+    NETWORK_SENSOR = "NETWORK_SENSOR"
+    IDENTITY_PROVIDER = "IDENTITY_PROVIDER"
+    APPLICATION_LOG = "APPLICATION_LOG"
+    GENERIC = "GENERIC"
+
+
+EVENT_SOURCES = tuple(source.value for source in EventSource)
+
+
+class SecurityEventStatus(StrEnum):
+    OPEN = "OPEN"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    CLOSED = "CLOSED"
+
+
+EVENT_STATUSES = tuple(status.value for status in SecurityEventStatus)
+
+
+class DetectionRuleType(StrEnum):
+    #: Deterministic field conditions (process, file, network, identity).
+    SIGNATURE = "SIGNATURE"
+    #: Signature plus a count over a time window.
+    THRESHOLD = "THRESHOLD"
+    #: Statistical baseline comparison produced by the anomaly job.
+    ANOMALY = "ANOMALY"
+
+
+class DetectionRuleSource(StrEnum):
+    BUILTIN = "BUILTIN"
+    CUSTOM = "CUSTOM"
+
+
+# ------------------------------------------------------------------- incidents
+class IncidentStatus(StrEnum):
+    OPEN = "OPEN"
+    TRIAGING = "TRIAGING"
+    INVESTIGATING = "INVESTIGATING"
+    CONTAINED = "CONTAINED"
+    RESOLVED = "RESOLVED"
+    CLOSED = "CLOSED"
+
+
+INCIDENT_STATUSES = tuple(status.value for status in IncidentStatus)
+
+ACTIVE_INCIDENT_STATUSES = (
+    IncidentStatus.OPEN.value,
+    IncidentStatus.TRIAGING.value,
+    IncidentStatus.INVESTIGATING.value,
+    IncidentStatus.CONTAINED.value,
+)
+
+#: Allowed transitions. Enforced in the service layer, like findings.
+ALLOWED_INCIDENT_TRANSITIONS: dict[str, set[str]] = {
+    IncidentStatus.OPEN.value: {
+        IncidentStatus.TRIAGING.value,
+        IncidentStatus.INVESTIGATING.value,
+        IncidentStatus.CONTAINED.value,
+        IncidentStatus.RESOLVED.value,
+        IncidentStatus.CLOSED.value,
+    },
+    IncidentStatus.TRIAGING.value: {
+        IncidentStatus.INVESTIGATING.value,
+        IncidentStatus.CONTAINED.value,
+        IncidentStatus.RESOLVED.value,
+        IncidentStatus.CLOSED.value,
+    },
+    IncidentStatus.INVESTIGATING.value: {
+        IncidentStatus.CONTAINED.value,
+        IncidentStatus.RESOLVED.value,
+        IncidentStatus.CLOSED.value,
+        IncidentStatus.TRIAGING.value,
+    },
+    IncidentStatus.CONTAINED.value: {
+        IncidentStatus.RESOLVED.value,
+        IncidentStatus.INVESTIGATING.value,
+        IncidentStatus.CLOSED.value,
+    },
+    IncidentStatus.RESOLVED.value: {
+        IncidentStatus.CLOSED.value,
+        IncidentStatus.OPEN.value,
+    },
+    IncidentStatus.CLOSED.value: {IncidentStatus.OPEN.value},
+}
+
+
+class IncidentPriority(StrEnum):
+    P1 = "P1"
+    P2 = "P2"
+    P3 = "P3"
+    P4 = "P4"
+
+
+INCIDENT_PRIORITIES = tuple(priority.value for priority in IncidentPriority)
+
+
+class IncidentEventKind(StrEnum):
+    CREATED = "CREATED"
+    EVENT_ATTACHED = "EVENT_ATTACHED"
+    FINDING_ATTACHED = "FINDING_ATTACHED"
+    STATUS_CHANGED = "STATUS_CHANGED"
+    ASSIGNED = "ASSIGNED"
+    NOTE = "NOTE"
+    AI_INVESTIGATION = "AI_INVESTIGATION"
+    REMEDIATION = "REMEDIATION"
+    CORRELATION = "CORRELATION"
+
+
+INCIDENT_EVENT_KINDS = tuple(kind.value for kind in IncidentEventKind)
+
+
+# ------------------------------------------------------------- threat intel
+class IndicatorType(StrEnum):
+    IP = "IP"
+    DOMAIN = "DOMAIN"
+    URL = "URL"
+    SHA256 = "SHA256"
+    MD5 = "MD5"
+    EMAIL = "EMAIL"
+
+
+INDICATOR_TYPES = tuple(kind.value for kind in IndicatorType)
+
+
+class IndicatorSource(StrEnum):
+    MANUAL = "MANUAL"
+    CSV_IMPORT = "CSV_IMPORT"
+    EXTERNAL_FEED = "EXTERNAL_FEED"
+    INTERNAL = "INTERNAL"
+
+
+INDICATOR_SOURCES = tuple(source.value for source in IndicatorSource)
+
+
+# ---------------------------------------------------------------- infrastructure
+class InfraTargetKind(StrEnum):
+    IAC_REPOSITORY = "IAC_REPOSITORY"
+    CONTAINER_IMAGE = "CONTAINER_IMAGE"
+    KUBERNETES_MANIFEST = "KUBERNETES_MANIFEST"
+    CLOUD_CONFIG = "CLOUD_CONFIG"
+
+
+INFRA_TARGET_KINDS = tuple(kind.value for kind in InfraTargetKind)
+
+
+class InfraScanStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+
+INFRA_SCAN_STATUSES = tuple(status.value for status in InfraScanStatus)
+
+INFRA_ACTIVE_STATUSES = (InfraScanStatus.PENDING.value, InfraScanStatus.RUNNING.value)
+
+
+class InfraScanner(StrEnum):
+    TRIVY_CONFIG = "trivy-config"
+    CHECKOV = "checkov"
+    TRIVY_IMAGE = "trivy-image"
+
+
+INFRA_SCANNERS = tuple(scanner.value for scanner in InfraScanner)
+
+
+# ----------------------------------------------------------------------- audit
+class AuditAction(StrEnum):
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    INGEST = "INGEST"
+    EXECUTE = "EXECUTE"
+    LOGIN = "LOGIN"
+
+
+AUDIT_ACTIONS = tuple(action.value for action in AuditAction)

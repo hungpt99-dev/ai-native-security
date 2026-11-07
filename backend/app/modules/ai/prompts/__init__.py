@@ -11,6 +11,12 @@ from app.modules.ai.prompts.assistant import (
 from app.modules.ai.prompts.assistant import (  # noqa: F401,E402
     INSTRUCTION as ASSISTANT_INSTRUCTION,
 )
+from app.modules.ai.prompts.incident import (
+    INCIDENT_PROMPT,
+)
+from app.modules.ai.prompts.incident import (  # noqa: F401,E402
+    INSTRUCTION as INCIDENT_INSTRUCTION,
+)
 from app.modules.ai.prompts.investigation import (  # noqa: F401,E402
     INSTRUCTION as INVESTIGATION_INSTRUCTION,
 )
@@ -37,6 +43,8 @@ from app.modules.ai.prompts.risk import RISK_PROMPT
 __all__ = [
     "ASSISTANT_INSTRUCTION",
     "ASSISTANT_PROMPT",
+    "INCIDENT_INSTRUCTION",
+    "INCIDENT_PROMPT",
     "INVESTIGATION_INSTRUCTION",
     "INVESTIGATION_PROMPT",
     "PromptRegistryError",

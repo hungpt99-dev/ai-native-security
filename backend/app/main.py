@@ -29,6 +29,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings.workspace_root.mkdir(parents=True, exist_ok=True)
     settings.storage_root.mkdir(parents=True, exist_ok=True)
     get_storage()
+    # Detection rules are data; seed them once so a fresh install has a working
+    # detection catalogue before the first event arrives.
+    try:
+        from app.database.session import SessionLocal
+        from app.modules.events.rules import ensure_builtin_rules
+
+        with SessionLocal() as db:
+            ensure_builtin_rules(db)
+            db.commit()
+    except Exception:  # the API must start even if the schema is mid-migration
+        logger.exception("detection rule seeding failed")
     logger.info("application started", extra={"extra_fields": {"env": settings.environment}})
     yield
     logger.info("application stopped")
@@ -90,6 +101,15 @@ def create_app() -> FastAPI:
     from app.api.v1.webhooks import router as webhook_router
 
     app.include_router(webhook_router, prefix=settings.api_v1_prefix)
+    # Telemetry ingestion authenticates with a dedicated sensor token, also
+    # outside the human API-key router.
+    from app.api.v1.ingest import router as ingest_router
+
+    app.include_router(ingest_router, prefix=settings.api_v1_prefix)
+
+    from app.modules.audit.service import audit_middleware
+
+    app.middleware("http")(audit_middleware)
 
     @app.get("/healthz", tags=["health"], summary="Liveness probe")
     def healthz() -> dict[str, str]:

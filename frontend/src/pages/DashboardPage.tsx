@@ -1,11 +1,22 @@
 import { Link } from "react-router-dom";
-import { Activity, AlertOctagon, Bug, CheckCircle2, Radar, Server } from "lucide-react";
+import {
+  Activity,
+  AlertOctagon,
+  Bug,
+  CheckCircle2,
+  Container,
+  Radio,
+  Radar,
+  Server,
+  ShieldCheck,
+  Siren,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState, PageHeader, ScanStatusBadge, SeverityBadge } from "@/components/common";
-import { useDashboard } from "@/hooks/queries";
+import { useDashboard, usePlatformOverview } from "@/hooks/queries";
 import { AiOverviewSection } from "@/components/ai-overview";
 import { formatRelative } from "@/lib/utils";
 
@@ -41,6 +52,69 @@ function StatCard({
   return to ? <Link to={to}>{content}</Link> : content;
 }
 
+function SecurityOperationsStrip() {
+  const { data, isLoading } = usePlatformOverview();
+  const healthTone =
+    data?.health === "HEALTHY" ? "success" : data?.health === "DEGRADED" ? "danger" : "medium";
+  const infraAssets =
+    data?.assets.by_kind?.CONTAINER_IMAGE ??
+    0;
+  return (
+    <div className="mb-6">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+          Security operations
+        </p>
+        <Link to="/monitoring" className="text-xs text-cyan-300 hover:text-cyan-200">
+          Monitoring health →
+        </Link>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Active incidents"
+          value={isLoading ? "—" : (data?.incidents.active ?? 0)}
+          hint="Human-owned lifecycle"
+          icon={Siren}
+          tone="text-rose-400"
+          to="/incidents"
+        />
+        <StatCard
+          label="Events (24h)"
+          value={isLoading ? "—" : (data?.events.last_24h ?? 0)}
+          hint="Deduplicated security telemetry"
+          icon={Radio}
+          tone="text-amber-300"
+          to="/monitoring"
+        />
+        <StatCard
+          label="Container images"
+          value={isLoading ? "—" : infraAssets}
+          hint="Image and IaC assessment targets"
+          icon={Container}
+          tone="text-sky-300"
+          to="/infrastructure"
+        />
+        <Link to="/monitoring">
+          <Card className="h-full transition-colors hover:border-slate-700">
+            <CardContent className="flex items-start justify-between">
+              <div>
+                <p className="label">Platform health</p>
+                <div className="mt-3">
+                  <Badge tone={healthTone}>{data?.health ?? "UNKNOWN"}</Badge>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">Evidence-based control status</p>
+              </div>
+              <div className="rounded-lg bg-slate-800/70 p-2 text-emerald-400">
+                <ShieldCheck className="h-5 w-5" />
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 export function DashboardPage() {
   const { data, isLoading, error } = useDashboard();
 
@@ -67,6 +141,8 @@ export function DashboardPage() {
       />
 
       <AiOverviewSection />
+
+      <SecurityOperationsStrip />
 
       {isLoading || !data ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

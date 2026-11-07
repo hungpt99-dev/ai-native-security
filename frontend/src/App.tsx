@@ -13,6 +13,10 @@ import { IntelligencePage } from "@/pages/IntelligencePage";
 import { OperationsPage } from "@/pages/OperationsPage";
 import { RemediationPage } from "@/pages/RemediationPage";
 import { AssistantPage } from "@/pages/AssistantPage";
+import { MonitoringPage } from "@/pages/MonitoringPage";
+import { IncidentsPage } from "@/pages/IncidentsPage";
+import { IncidentDetailPage } from "@/pages/IncidentDetailPage";
+import { InfrastructurePage } from "@/pages/InfrastructurePage";
 
 export function App() {
   return (
@@ -24,6 +28,10 @@ export function App() {
         <Route path="scans" element={<ScansPage />} />
         <Route path="scans/:id" element={<ScanDetailPage />} />
         <Route path="findings" element={<FindingsPage />} />
+        <Route path="monitoring" element={<MonitoringPage />} />
+        <Route path="incidents" element={<IncidentsPage />} />
+        <Route path="incidents/:id" element={<IncidentDetailPage />} />
+        <Route path="infrastructure" element={<InfrastructurePage />} />
         <Route path="sboms" element={<SbomsPage />} />
         <Route path="sboms/:id" element={<SbomDetailPage />} />
         <Route path="sboms/:id/compare" element={<SbomComparePage />} />

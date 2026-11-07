@@ -617,3 +617,281 @@ export type AiExecution = {
   started_at: string | null;
   finished_at: string | null;
 };
+
+/* ------------------------------------------------------------------ platform */
+
+export type AssetKind =
+  | "REPOSITORY"
+  | "CONTAINER_IMAGE"
+  | "HOST"
+  | "CLOUD_RESOURCE"
+  | "KUBERNETES_WORKLOAD"
+  | "API_SERVICE";
+
+export type EventCategory =
+  | "RUNTIME"
+  | "NETWORK"
+  | "IDENTITY"
+  | "INFRASTRUCTURE"
+  | "APPLICATION"
+  | "DATA";
+
+export interface SecurityEvent {
+  id: string;
+  category: EventCategory;
+  source: string;
+  source_event_id: string | null;
+  event_type: string;
+  title: string;
+  description: string | null;
+  severity: Severity;
+  status: "OPEN" | "ACKNOWLEDGED" | "CLOSED";
+  asset_id: string | null;
+  incident_id: string | null;
+  rule_slug: string | null;
+  rule_version: number | null;
+  risk_score: number | null;
+  occurrence_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  acknowledged_at: string | null;
+  closed_at: string | null;
+  normalized: Record<string, unknown>;
+  indicators: Array<{ type: string; value: string }>;
+  enrichment: {
+    asset?: { resolved?: boolean; match?: string; external_ref?: string };
+    threat_matches?: Array<{ type: string; value: string; source: string; confidence: number }>;
+    matched_rules?: Array<{ slug: string; severity: string; version: number }>;
+    threshold?: { rule: string; count: number; window_seconds: number };
+    incident?: { id: string; priority: string };
+    raw_truncated?: boolean;
+  };
+  created_at: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface DetectionRule {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  category: string;
+  severity: Severity;
+  rule_type: "SIGNATURE" | "THRESHOLD" | "ANOMALY";
+  source: "BUILTIN" | "CUSTOM";
+  enabled: boolean;
+  version: number;
+  conditions: Record<string, unknown>;
+  threshold: Record<string, unknown> | null;
+  create_incident: boolean;
+  incident_priority: string | null;
+  match_count: number;
+  last_matched_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EventSummary {
+  window_hours: number;
+  total: number;
+  open: number;
+  by_category: Record<string, number>;
+  by_severity: Record<string, number>;
+  last_event_at: string | null;
+  per_hour: Array<{ hour: string; count: number }>;
+}
+
+export type IncidentStatus =
+  | "OPEN"
+  | "TRIAGING"
+  | "INVESTIGATING"
+  | "CONTAINED"
+  | "RESOLVED"
+  | "CLOSED";
+
+export interface Incident {
+  id: string;
+  title: string;
+  summary: string | null;
+  severity: Severity;
+  priority: "P1" | "P2" | "P3" | "P4";
+  status: IncidentStatus;
+  category: EventCategory | null;
+  asset_id: string | null;
+  correlation_key: string;
+  detection_rule_slug: string | null;
+  risk_score: number;
+  event_count: number;
+  finding_count: number;
+  assigned_to: string | null;
+  opened_at: string;
+  acknowledged_at: string | null;
+  contained_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentTimelineEntry {
+  id: string;
+  kind: string;
+  message: string;
+  actor: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface IncidentDetail {
+  incident: Incident;
+  asset: {
+    id: string;
+    name: string;
+    kind: AssetKind;
+    repo_url: string | null;
+    external_ref: string | null;
+  } | null;
+  events: SecurityEvent[];
+  findings: Array<{
+    id: string;
+    title: string;
+    severity: Severity;
+    status: string;
+    cve_id: string | null;
+    package_name: string | null;
+    file_path: string | null;
+    asset_id: string;
+  }>;
+  timeline: IncidentTimelineEntry[];
+}
+
+export interface IncidentSummary {
+  active: number;
+  by_status: Record<string, number>;
+  by_severity: Record<string, number>;
+  top_open: Incident[];
+}
+
+export interface IncidentInvestigation {
+  id: string;
+  incident_id: string;
+  status: string;
+  summary: string;
+  confidence: number | null;
+  evidence: Array<{ key: string; note: string }>;
+  missing_information: Array<{ code: string; message: string }>;
+  next_actions: string[];
+  attack_steps: Array<{ order: number; description: string; evidence: string[] }>;
+  model: string;
+  prompt_id: string;
+  prompt_version: string;
+  ai_execution_id: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface MonitoringComponent {
+  status: "HEALTHY" | "DEGRADED" | "UNKNOWN" | "DISABLED";
+  detail: Record<string, unknown>;
+  checked_at: string;
+}
+
+export interface MonitoringHealth {
+  status: string;
+  components: Record<string, MonitoringComponent>;
+  checked_at: string;
+}
+
+export interface PlatformOverview {
+  assets: { total: number; by_kind: Record<string, number> };
+  findings: { active: number; by_severity: Record<string, number> };
+  incidents: { active: number; top: Incident[] };
+  events: { last_24h: number; highest_risk: SecurityEvent[] };
+  health: string;
+}
+
+export interface InfrastructureScan {
+  id: string;
+  asset_id: string | null;
+  target_kind: string;
+  target_ref: string;
+  scanner: string;
+  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "SKIPPED";
+  triggered_by: string;
+  requested_by: string | null;
+  commit_sha: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  total_findings: number;
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+  error_message: string | null;
+  scanner_version: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface InfraAsset {
+  id: string;
+  name: string;
+  kind: AssetKind;
+  external_ref: string | null;
+  parent_asset_id: string | null;
+  repo_url: string | null;
+  description: string | null;
+  monitoring_enabled: boolean;
+  last_infra_scan_at: string | null;
+  last_infra_scan_status: string | null;
+  created_at: string;
+}
+
+export interface InfrastructureSummary {
+  enabled: boolean;
+  active: number;
+  by_target_kind: Record<string, number>;
+  scans_with_findings: Record<string, number>;
+  open_findings_by_severity: Record<string, number>;
+  last_scan_at: string | null;
+  scanners: Array<{
+    scanner: string;
+    target_kind: string;
+    available: boolean;
+    error: string | null;
+  }>;
+}
+
+export interface ThreatIndicator {
+  id: string;
+  indicator_type: string;
+  value: string;
+  source: string;
+  source_ref: string | null;
+  severity: Severity;
+  confidence: number;
+  description: string | null;
+  tags: string[];
+  active: boolean;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  expires_at: string | null;
+  ingested_at: string;
+  created_at: string;
+}
+
+export interface AuditEntry {
+  id: string;
+  created_at: string;
+  actor: string;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  status_code: number | null;
+  request_id: string | null;
+  ip_address: string | null;
+  detail: Record<string, unknown>;
+}

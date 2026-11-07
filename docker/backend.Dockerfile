@@ -45,12 +45,17 @@ COPY --from=anchore/syft:v1.33.0 /syft /usr/local/bin/syft
 
 FROM base AS worker
 
+# Checkov is optional: it is a large dependency and Trivy config covers the
+# default IaC path. Set INSTALL_CHECKOV=true at build time to enable it.
+ARG INSTALL_CHECKOV=false
+
 USER root
 COPY --from=scanners /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=scanners /usr/local/bin/gitleaks /usr/local/bin/gitleaks
 COPY --from=scanners /usr/local/bin/syft /usr/local/bin/syft
 RUN chmod +x /usr/local/bin/trivy /usr/local/bin/gitleaks /usr/local/bin/syft \
     && pip install --no-cache-dir semgrep==1.183.0 \
+    && if [ "$INSTALL_CHECKOV" = "true" ]; then pip install --no-cache-dir checkov==3.2.334; fi \
     && semgrep --version \
     && trivy --version \
     && gitleaks version \

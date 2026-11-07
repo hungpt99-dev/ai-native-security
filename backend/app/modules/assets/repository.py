@@ -16,8 +16,11 @@ def asset_query(
     search: str | None = None,
     provider: str | None = None,
     monitoring_enabled: bool | None = None,
+    kind: str = "REPOSITORY",
 ) -> Select:
-    stmt = select(Asset)
+    # The repository endpoints are about source repositories; container images
+    # and hosts live in the same table but have their own endpoints.
+    stmt = select(Asset).where(Asset.kind == kind)
     if search:
         pattern = f"%{search.strip()}%"
         stmt = stmt.where(or_(Asset.name.ilike(pattern), Asset.repo_url.ilike(pattern)))
@@ -37,7 +40,13 @@ def get_asset_by_url(db: Session, repo_url: str) -> Asset | None:
 
 
 def list_monitored_assets(db: Session) -> Sequence[Asset]:
-    return db.execute(select(Asset).where(Asset.monitoring_enabled.is_(True))).scalars().all()
+    return (
+        db.execute(
+            select(Asset).where(
+                Asset.kind == "REPOSITORY", Asset.monitoring_enabled.is_(True)
+            )
+        ).scalars().all()
+    )
 
 
 def get_credential(db: Session, credential_id: uuid.UUID) -> AssetCredential | None:
@@ -45,4 +54,8 @@ def get_credential(db: Session, credential_id: uuid.UUID) -> AssetCredential | N
 
 
 def count_assets(db: Session) -> int:
-    return int(db.execute(select(func.count(Asset.id))).scalar_one())
+    return int(
+        db.execute(
+            select(func.count(Asset.id)).where(Asset.kind == "REPOSITORY")
+        ).scalar_one()
+    )

@@ -6,8 +6,21 @@ import type {
   AiOverview,
   Asset,
   DashboardSummary,
+  DetectionRule,
+  EventSummary,
   Finding,
+  Incident,
+  IncidentDetail,
+  IncidentInvestigation,
+  IncidentSummary,
+  IncidentTimelineEntry,
+  InfraAsset,
+  InfrastructureScan,
+  InfrastructureSummary,
   IntelligenceStats,
+  MonitoringHealth,
+  PlatformOverview,
+  SecurityEvent,
   Job,
   InvestigationReport,
   MonitoringRun,
@@ -525,5 +538,205 @@ export function useAiExecutions(params: QueryParams) {
   return useQuery({
     queryKey: ["ai-executions", params],
     queryFn: () => api.get<Page<AiExecution>>("/ai/executions", params),
+  });
+}
+
+/* --------------------------------------------------------- security platform */
+
+export function useMonitoringHealth() {
+  return useQuery({
+    queryKey: ["monitoring-health"],
+    queryFn: () => api.get<MonitoringHealth>("/monitoring/health"),
+    refetchInterval: 30000,
+  });
+}
+
+export function usePlatformOverview() {
+  return useQuery({
+    queryKey: ["platform-overview"],
+    queryFn: () => api.get<PlatformOverview>("/monitoring/overview"),
+    refetchInterval: 20000,
+  });
+}
+
+export function useEvents(params: QueryParams) {
+  return useQuery({
+    queryKey: ["events", params],
+    queryFn: () => api.get<Page<SecurityEvent>>("/events", params),
+    refetchInterval: 10000,
+  });
+}
+
+export function useEvent(id: string | undefined) {
+  return useQuery({
+    queryKey: ["event", id],
+    queryFn: () => api.get<SecurityEvent>(`/events/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useEventSummary(windowHours = 24) {
+  return useQuery({
+    queryKey: ["event-summary", windowHours],
+    queryFn: () => api.get<EventSummary>("/events/summary", { window_hours: windowHours }),
+    refetchInterval: 30000,
+  });
+}
+
+export function useDetectionRules() {
+  return useQuery({
+    queryKey: ["detection-rules"],
+    queryFn: () => api.get<DetectionRule[]>("/events/rules"),
+  });
+}
+
+export function useUpdateRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Partial<DetectionRule> }) =>
+      api.patch<DetectionRule>(`/events/rules/${id}`, payload),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["detection-rules"] }),
+  });
+}
+
+export function useAcknowledgeEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<SecurityEvent>(`/events/${id}/acknowledge`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["event-summary"] });
+    },
+  });
+}
+
+export function useIncidents(params: QueryParams) {
+  return useQuery({
+    queryKey: ["incidents", params],
+    queryFn: () => api.get<Page<Incident>>("/incidents", params),
+    refetchInterval: 15000,
+  });
+}
+
+export function useIncident(id: string | undefined) {
+  return useQuery({
+    queryKey: ["incident", id],
+    queryFn: () => api.get<IncidentDetail>(`/incidents/${id}`),
+    enabled: Boolean(id),
+    refetchInterval: 15000,
+  });
+}
+
+export function useIncidentSummary() {
+  return useQuery({
+    queryKey: ["incident-summary"],
+    queryFn: () => api.get<IncidentSummary>("/incidents/summary"),
+    refetchInterval: 20000,
+  });
+}
+
+export function useUpdateIncident(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { status: string; note?: string }) =>
+      api.patch<Incident>(`/incidents/${id}`, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["incident", id] });
+      void queryClient.invalidateQueries({ queryKey: ["incidents"] });
+      void queryClient.invalidateQueries({ queryKey: ["incident-summary"] });
+    },
+  });
+}
+
+export function useAssignIncident(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (assignee: string | null) =>
+      api.post<Incident>(`/incidents/${id}/assign`, { assignee }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["incident", id] }),
+  });
+}
+
+export function useAddIncidentNote(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: string) => api.post<IncidentTimelineEntry>(`/incidents/${id}/notes`, { body }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["incident", id] }),
+  });
+}
+
+export function useCorrelateIncident(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ events: number; findings: number }>(`/incidents/${id}/correlate`),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["incident", id] }),
+  });
+}
+
+export function useInvestigateIncident(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<IncidentInvestigation>(`/incidents/${id}/investigate`),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["incident", id] }),
+  });
+}
+
+export function useInfrastructureScans(params: QueryParams) {
+  return useQuery({
+    queryKey: ["infra-scans", params],
+    queryFn: () => api.get<Page<InfrastructureScan>>("/infrastructure/scans", params),
+    refetchInterval: 10000,
+  });
+}
+
+export function useInfrastructureSummary() {
+  return useQuery({
+    queryKey: ["infra-summary"],
+    queryFn: () => api.get<InfrastructureSummary>("/infrastructure/summary"),
+    refetchInterval: 30000,
+  });
+}
+
+export function useInfraAssets(params: QueryParams) {
+  return useQuery({
+    queryKey: ["infra-assets", params],
+    queryFn: () => api.get<Page<InfraAsset>>("/infrastructure/assets", params),
+  });
+}
+
+export function useCreateInfraScan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: {
+      target_kind: string;
+      scanner: string;
+      asset_id?: string;
+      target_ref?: string;
+    }) => api.post<InfrastructureScan>("/infrastructure/scans", payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["infra-scans"] });
+      void queryClient.invalidateQueries({ queryKey: ["infra-summary"] });
+    },
+  });
+}
+
+export function useCreateInfraAsset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: {
+      name: string;
+      kind: string;
+      external_ref: string;
+      monitoring_enabled?: boolean;
+    }) => api.post<InfraAsset>("/infrastructure/assets", payload),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["infra-assets"] }),
+  });
+}
+
+export function useIncidentInvestigations(id: string | undefined) {
+  return useQuery({
+    queryKey: ["incident-investigations", id],
+    queryFn: () => api.get<IncidentInvestigation[]>(`/incidents/${id}/investigations`),
+    enabled: Boolean(id),
   });
 }

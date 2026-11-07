@@ -385,6 +385,8 @@ def _enqueue_auto_analysis(db: Session, scan: Scan) -> int:
 def _checkout(
     db: Session, scan: Scan, asset: Asset, workspace: Path, heartbeat: Heartbeat
 ) -> Checkout:
+    if not asset.repo_url:
+        raise ValueError("Asset has no repository URL")
     token = resolve_access_token(db, asset)
     heartbeat()
     return clone_repository(

@@ -166,3 +166,36 @@ class PlannedCalls(BaseModel):
 
     tool_calls: list[dict[str, Any]] | None = None
     reasoning: str | None = None
+
+
+class AttackStep(BaseModel):
+    """One step in a reconstructed attack path, each citing evidence keys."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    order: int = Field(ge=1, le=20)
+    description: str = Field(min_length=1, max_length=600)
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+
+
+class IncidentInvestigationOutput(BaseModel):
+    """Cross-domain investigation of a correlated incident.
+
+    The schema cannot express "the environment is safe": the strongest negative
+    is ``NO_EVIDENCE_FOUND``, and containment actions are recommendations for a
+    human, never executed commands.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: InvestigationStatusLiteral
+    confidence: float = Field(ge=0, le=1)
+    summary: str = Field(min_length=1, max_length=1600)
+    likely_attack_path: str = Field(default="", max_length=2500)
+    business_impact: str = Field(default="", max_length=2000)
+    attack_steps: list[AttackStep] = Field(default_factory=list, max_length=12)
+    evidence: list[EvidenceRef] = Field(default_factory=list, max_length=25)
+    missing_information: list[str] = Field(default_factory=list, max_length=20)
+    containment_actions: list[str] = Field(default_factory=list, max_length=10)
+    investigation_queries: list[str] = Field(default_factory=list, max_length=10)
+    requires_human_review: bool = True

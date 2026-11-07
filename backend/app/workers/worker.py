@@ -183,6 +183,29 @@ def _run_job(db: Session, job: Job, current_worker: str) -> None:
             automation.enqueue_auto_analysis(db, new_ids, origin="SBOM_REASSESSMENT")
         return
 
+    if job.kind == JobKind.INFRA_SCAN.value:
+        from app.modules.infrastructure import service as infrastructure_service
+
+        raw_scan_id = payload.get("scan_id")
+        if not raw_scan_id:
+            raise ValueError("INFRA_SCAN job payload is missing scan_id")
+        scan_id_var.set(None)
+        infrastructure_service.execute_scan(
+            db, uuid.UUID(str(raw_scan_id)), heartbeat=heartbeat
+        )
+        return
+
+    if job.kind == JobKind.RUNTIME_ANOMALY_SCAN.value:
+        from app.modules.events import anomaly
+
+        scan_id_var.set(None)
+        result = anomaly.run(db)
+        logger.info(
+            "runtime anomaly job finished",
+            extra={"extra_fields": {k: v for k, v in result.items() if k != "anomalies"}},
+        )
+        return
+
     raise ValueError(f"Unsupported job kind: {job.kind}")
 
 

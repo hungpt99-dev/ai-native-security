@@ -64,6 +64,17 @@ class ScannerUnavailableError(AppError):
     code = "scanner_unavailable"
 
 
+class ServiceUnavailableError(AppError):
+    """A capability is not configured (ingestion token, AI provider, ...).
+
+    Used instead of accepting unverifiable input: an unconfigured integration
+    answers 503, it does not silently trust the caller.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "service_unavailable"
+
+
 class ExternalServiceError(AppError):
     status_code = status.HTTP_502_BAD_GATEWAY
     code = "external_service_error"

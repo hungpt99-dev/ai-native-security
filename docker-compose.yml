@@ -57,6 +57,8 @@ services:
       context: .
       dockerfile: docker/backend.Dockerfile
       target: worker
+      args:
+        INSTALL_CHECKOV: ${INSTALL_CHECKOV:-false}
     env_file: [.env]
     environment:
       ANS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-security}:${POSTGRES_PASSWORD:-security}@postgres:5432/${POSTGRES_DB:-security}

@@ -200,7 +200,49 @@ class Settings(BaseSettings):
     #: webhook endpoints are disabled and answer 503 rather than trusting input.
     webhook_secret: str | None = None
 
-    @field_validator("api_keys", "allowed_git_hosts", "cors_origins", "scanners_enabled", mode="before")
+    # ---------------------------------------------------- runtime event intake
+    #: Shared token required by the ingestion API and the Falco webhook. When
+    #: unset, ingestion is disabled (503) instead of accepting unauthenticated
+    #: security telemetry.
+    events_ingest_token: str | None = None
+    #: Maximum events accepted in one request; larger batches are rejected so a
+    #: misconfigured sensor cannot exhaust the API.
+    events_max_batch: int = 500
+    #: Create inventory rows for container images/hosts seen in events.
+    events_auto_create_assets: bool = True
+    events_max_auto_assets_per_batch: int = 50
+    #: Ceiling for the threshold-rule scan window; keeps ingestion bounded.
+    events_threshold_scan_limit: int = 5000
+    #: Statistical anomaly pass over stored events.
+    events_anomaly_enabled: bool = True
+    events_anomaly_interval_minutes: int = 1440
+    events_anomaly_min_count: int = 20
+    events_anomaly_multiplier: float = 4.0
+    events_anomaly_baseline_days: int = 7
+    #: A matching detection rule reuses an open incident for this long.
+    incident_reuse_window_hours: int = 24
+
+    # ------------------------------------------------------- infrastructure
+    infrastructure_enabled: bool = True
+    checkov_binary: str = "checkov"
+    infrastructure_timeout_seconds: int = 1800
+    #: Only these registries may be pulled for image assessment (SSRF control:
+    #: an arbitrary reference could point at an internal registry).
+    allowed_image_registries: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["docker.io", "registry-1.docker.io", "ghcr.io", "quay.io"]
+    )
+    infrastructure_scan_interval_minutes: int = 1440
+    #: Maximum findings persisted per infrastructure scan (safety ceiling).
+    infrastructure_max_findings: int = 2000
+
+    @field_validator(
+        "api_keys",
+        "allowed_git_hosts",
+        "cors_origins",
+        "scanners_enabled",
+        "allowed_image_registries",
+        mode="before",
+    )
     @classmethod
     def _parse_lists(cls, value: Any, info: ValidationInfo) -> Any:
         if isinstance(value, str):
@@ -213,6 +255,12 @@ class Settings(BaseSettings):
                     "allowed_git_hosts": ["github.com", "gitlab.com"],
                     "cors_origins": ["http://localhost:5173"],
                     "scanners_enabled": ["trivy", "semgrep", "gitleaks", "syft"],
+                    "allowed_image_registries": [
+                        "docker.io",
+                        "registry-1.docker.io",
+                        "ghcr.io",
+                        "quay.io",
+                    ],
                 }
                 return defaults.get(info.field_name or "", [])
             if stripped.startswith("["):

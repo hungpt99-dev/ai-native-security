@@ -30,9 +30,17 @@ def dashboard_summary(
     db: Annotated[Session, Depends(get_db)], principal: CurrentPrincipal
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
-    assets_total = int(db.execute(select(func.count(Asset.id))).scalar_one())
+    assets_total = int(
+        db.execute(
+            select(func.count(Asset.id)).where(Asset.kind == "REPOSITORY")
+        ).scalar_one()
+    )
     assets_monitored = int(
-        db.execute(select(func.count(Asset.id)).where(Asset.monitoring_enabled.is_(True))).scalar_one()
+        db.execute(
+            select(func.count(Asset.id)).where(
+                Asset.kind == "REPOSITORY", Asset.monitoring_enabled.is_(True)
+            )
+        ).scalar_one()
     )
 
     severities = severity_counts(db)
@@ -87,7 +95,10 @@ def dashboard_summary(
     ).all()
 
     failing_assets = db.execute(
-        select(Asset).where(Asset.last_scan_status == "FAILED").order_by(Asset.last_scan_at.desc()).limit(5)
+        select(Asset)
+        .where(Asset.kind == "REPOSITORY", Asset.last_scan_status == "FAILED")
+        .order_by(Asset.last_scan_at.desc())
+        .limit(5)
     ).scalars().all()
 
     active_scans = int(

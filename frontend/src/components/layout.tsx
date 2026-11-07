@@ -3,27 +3,58 @@ import {
   Activity,
   Bot,
   Boxes,
+  Container,
   GitPullRequest,
   LayoutDashboard,
   Package,
   Radar,
+  Radio,
   Server,
   ShieldAlert,
+  Siren,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSystemInfo } from "@/hooks/queries";
 
-const navigation = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/assets", label: "Repositories", icon: Server },
-  { to: "/scans", label: "Scans", icon: Activity },
-  { to: "/findings", label: "Findings", icon: ShieldAlert },
-  { to: "/remediation", label: "Remediation", icon: GitPullRequest },
-  { to: "/assistant", label: "Assistant", icon: Bot },
-  { to: "/sboms", label: "SBOMs", icon: Package },
-  { to: "/intelligence", label: "Intelligence", icon: Radar },
-  { to: "/operations", label: "Operations", icon: Boxes },
+const navigation: Array<{
+  label?: string;
+  items: Array<{ to: string; label: string; icon: typeof ShieldAlert; end?: boolean }>;
+}> = [
+  {
+    items: [{ to: "/", label: "Security overview", icon: LayoutDashboard, end: true }],
+  },
+  {
+    label: "Operations",
+    items: [
+      { to: "/incidents", label: "Incidents", icon: Siren },
+      { to: "/monitoring", label: "Monitoring", icon: Radio },
+      { to: "/findings", label: "Findings", icon: ShieldAlert },
+      { to: "/infrastructure", label: "Infrastructure", icon: Container },
+    ],
+  },
+  {
+    label: "Supply chain",
+    items: [
+      { to: "/assets", label: "Repositories", icon: Server },
+      { to: "/scans", label: "Scans", icon: Activity },
+      { to: "/sboms", label: "SBOMs", icon: Package },
+      { to: "/intelligence", label: "Intelligence", icon: Radar },
+    ],
+  },
+  {
+    label: "Response",
+    items: [
+      { to: "/remediation", label: "Remediation", icon: GitPullRequest },
+      { to: "/assistant", label: "Assistant", icon: Bot },
+    ],
+  },
+  {
+    label: "System",
+    items: [{ to: "/operations", label: "Operations log", icon: Boxes }],
+  },
 ];
+
+const flatNavigation = navigation.flatMap((group) => group.items);
 
 export function AppShell() {
   const { data: info } = useSystemInfo();
@@ -40,26 +71,37 @@ export function AppShell() {
             <p className="text-xs text-slate-500">Security Platform</p>
           </div>
         </div>
-        <nav className="flex-1 space-y-1">
-          {navigation.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100",
-                  isActive && "bg-slate-800/80 text-white",
-                )
-              }
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </NavLink>
+        <nav className="flex-1 space-y-4 overflow-y-auto">
+          {navigation.map((group, index) => (
+            <div key={group.label ?? `group-${index}`}>
+              {group.label && (
+                <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">
+                  {group.label}
+                </p>
+              )}
+              <div className="space-y-1">
+                {group.items.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100",
+                        isActive && "bg-slate-800/80 text-white",
+                      )
+                    }
+                  >
+                    <item.icon className="h-4 w-4" />
+                    {item.label}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
         <div className="mt-4 space-y-1 rounded-lg border border-slate-800 bg-slate-900/50 p-3 text-xs text-slate-500">
-          <p className="font-medium text-slate-300">{info?.name ?? "Phase 1"}</p>
+          <p className="font-medium text-slate-300">{info?.name ?? "AI-Native Security"}</p>
           <p>v{info?.version ?? "0.1.0"} · {info?.environment ?? "development"}</p>
           <p>Auth {info?.auth_enabled ? "enabled" : "disabled"}</p>
         </div>
@@ -72,7 +114,7 @@ export function AppShell() {
             <span className="text-sm font-semibold text-white">AI-Native Security</span>
           </div>
           <div className="hidden text-xs text-slate-500 lg:block">
-            Continuous repository scanning · SBOM · vulnerability intelligence
+            Application · supply chain · infrastructure · runtime · AI investigation
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-400">
             <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
@@ -81,7 +123,7 @@ export function AppShell() {
         </header>
 
         <nav className="flex gap-1 overflow-x-auto border-b border-slate-800/80 px-2 py-2 lg:hidden">
-          {navigation.map((item) => (
+          {flatNavigation.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

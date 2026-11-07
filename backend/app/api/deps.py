@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AuthenticationError
@@ -28,6 +28,17 @@ class Principal:
     is_authenticated: bool
     #: ``None`` means "all assets"; a set restricts reads to those assets.
     asset_scope: frozenset[uuid.UUID] | None = None
+
+    def allows(self, asset_id: uuid.UUID | None) -> bool:
+        """True when this principal may read the given asset.
+
+        An unscoped principal may read everything. A scoped principal may read
+        its own assets and, deliberately, nothing with an unresolved asset —
+        unattributed telemetry is not leaked to scoped callers.
+        """
+        if self.asset_scope is None:
+            return True
+        return asset_id is not None and asset_id in self.asset_scope
 
 
 ANONYMOUS = Principal(subject="anonymous", is_authenticated=False)
@@ -51,20 +62,26 @@ def asset_scope_for(index: int, settings: Settings) -> frozenset[uuid.UUID] | No
 
 
 def get_principal(
+    request: Request,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> Principal:
     settings = get_settings()
     if not settings.auth_enabled:
-        return ANONYMOUS
+        principal = ANONYMOUS
+        request.state.principal = principal
+        return principal
     if not x_api_key:
         raise AuthenticationError("Missing X-API-Key header")
     for index, key in enumerate(settings.api_keys, start=1):
         if key and constant_time_equals(key, x_api_key):
-            return Principal(
+            principal = Principal(
                 subject=f"api-key-{index}",
                 is_authenticated=True,
                 asset_scope=asset_scope_for(index, settings),
             )
+            # Read by the audit middleware once the response is produced.
+            request.state.principal = principal
+            return principal
     raise AuthenticationError("Invalid API key")
 
 
